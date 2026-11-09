@@ -89,6 +89,9 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Set up Android SDK
         run: |
           # `sdkmanager` is not on PATH on every runner image, so it is
