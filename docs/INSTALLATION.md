@@ -13,7 +13,7 @@
 
 ## Installing the APK
 
-1. Open the [releases page](https://github.com/tukiza7-debug/discord-media-sender/releases)
+1. Open the [releases page](https://github.com/ryujin-hue/discord-media-sender/releases)
    and download `DiscordMediaSender.apk` **and** `SHA256SUMS.txt`.
 2. Verify the checksum:
 

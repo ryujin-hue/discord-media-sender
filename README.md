@@ -17,7 +17,7 @@ upload engine.
 | Target / compile SDK | 36 |
 | Flutter | 3.47.9 stable · Dart 3.13.7 |
 | Discord API | REST v10 |
-| Official repository | `tukiza7-debug/discord-media-sender` |
+| Official repository | `ryujin-hue/discord-media-sender` |
 
 ---
 
@@ -155,7 +155,7 @@ Full details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 ## Installation
 
 Download `DiscordMediaSender.apk` and `SHA256SUMS.txt` from the
-[GitHub Releases page](https://github.com/tukiza7-debug/discord-media-sender/releases),
+[GitHub Releases page](https://github.com/ryujin-hue/discord-media-sender/releases),
 verify the checksum and install the APK:
 
 ```bash
@@ -172,7 +172,7 @@ Installing over an existing 1.0 installation keeps all user data. See
 ## Developer setup
 
 ```bash
-git clone https://github.com/tukiza7-debug/discord-media-sender.git
+git clone https://github.com/ryujin-hue/discord-media-sender.git
 cd discord-media-sender
 flutter pub get
 flutter run

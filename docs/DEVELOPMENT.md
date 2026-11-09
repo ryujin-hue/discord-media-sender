@@ -18,7 +18,7 @@ flutter doctor
 ## Getting started
 
 ```bash
-git clone https://github.com/tukiza7-debug/discord-media-sender.git
+git clone https://github.com/ryujin-hue/discord-media-sender.git
 cd discord-media-sender
 flutter pub get
 

@@ -139,7 +139,7 @@ version is bumped. The `Version bump` workflow computes the next version and upd
 The update manager never installs an unverified APK:
 
 1. It fetches the release metadata from
-   `https://api.github.com/repos/tukiza7-debug/discord-media-sender/releases/latest`.
+   `https://api.github.com/repos/ryujin-hue/discord-media-sender/releases/latest`.
 2. It compares the versions with a full SemVer comparison (a pre-release such as
    `2.1.0-beta.1` is older than `2.1.0`).
 3. It downloads `DiscordMediaSender.apk` and computes its SHA-256.

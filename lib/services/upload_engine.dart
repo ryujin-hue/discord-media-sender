@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -122,15 +123,23 @@ class EnqueueOptions {
 /// There is exactly one engine per isolate, and its state is persisted in
 /// SQLite so that it can be recovered after a process restart.
 class UploadEngine {
-  UploadEngine._();
+  UploadEngine._({DiscordApiClient? apiClient})
+    : _api = apiClient ?? DiscordApiClient();
 
   static UploadEngine? _instance;
 
   /// The engine of the current isolate.
   static UploadEngine get instance => _instance ??= UploadEngine._();
 
+  /// Creates an engine with an injected API client.
+  ///
+  /// The test suite uses this to drive the queue without a network.
+  @visibleForTesting
+  static UploadEngine createForTesting({DiscordApiClient? apiClient}) =>
+      UploadEngine._(apiClient: apiClient);
+
   final AppDatabase _db = AppDatabase.instance;
-  final DiscordApiClient _api = DiscordApiClient();
+  final DiscordApiClient _api;
   final StreamController<EngineSnapshot> _snapshots =
       StreamController<EngineSnapshot>.broadcast();
 
@@ -138,6 +147,7 @@ class UploadEngine {
   final List<LiveActivityEvent> _events = <LiveActivityEvent>[];
 
   bool _running = false;
+  Future<void>? _runFuture;
   bool _paused = false;
   bool _cancelRequested = false;
   String? _activeDestinationId;
@@ -329,7 +339,26 @@ class UploadEngine {
   }
 
   /// Runs the queue until it is empty, paused or cancelled.
+  ///
+  /// Calling this while a run is already in progress joins that run instead
+  /// of starting a second one.
   Future<void> run() async {
+    final Future<void>? existing = _runFuture;
+    if (existing != null) return existing;
+    final Completer<void> completer = Completer<void>();
+    _runFuture = completer.future;
+    try {
+      await _runLoop();
+      completer.complete();
+    } catch (error, stack) {
+      completer.completeError(error, stack);
+      rethrow;
+    } finally {
+      _runFuture = null;
+    }
+  }
+
+  Future<void> _runLoop() async {
     if (_running) return;
     _running = true;
     _cancelRequested = false;
@@ -775,11 +804,26 @@ class UploadEngine {
     _publish();
   }
 
+  /// Finds a job in memory and falls back to the database.
+  ///
+  /// A retry issued after the app was restarted must find the persisted job.
+  Future<DistributionJob?> _findJob(String jobId) async {
+    final int index = _jobs.indexWhere((DistributionJob j) => j.id == jobId);
+    if (index >= 0) return _jobs[index];
+    final List<DistributionJob> stored = await _db.listJobs();
+    for (final DistributionJob job in stored) {
+      if (job.id == jobId) {
+        _jobs.add(job);
+        return job;
+      }
+    }
+    return null;
+  }
+
   /// Cancels a single job.
   Future<void> cancelJob(String jobId) async {
-    final int index = _jobs.indexWhere((DistributionJob j) => j.id == jobId);
-    if (index < 0) return;
-    final DistributionJob job = _jobs[index];
+    final DistributionJob? job = await _findJob(jobId);
+    if (job == null) return;
     if (job.status == UploadStatus.completed.key ||
         job.status == UploadStatus.failed.key) {
       return;
@@ -804,9 +848,8 @@ class UploadEngine {
 
   /// Retries a failed job.
   Future<void> retryJob(String jobId) async {
-    final int index = _jobs.indexWhere((DistributionJob j) => j.id == jobId);
-    if (index < 0) return;
-    final DistributionJob job = _jobs[index];
+    final DistributionJob? job = await _findJob(jobId);
+    if (job == null) return;
     if (job.status != UploadStatus.failed.key &&
         job.status != UploadStatus.cancelled.key) {
       return;

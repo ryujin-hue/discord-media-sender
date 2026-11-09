@@ -11,12 +11,12 @@ The repository contains two workflows:
 
 ## Repository setup
 
-The workflows expect the repository to be **`tukiza7-debug/discord-media-sender`** — that
-is the repository the 1.0 build already checked for updates, and it is hard-coded in
+The workflows expect the repository to be **`ryujin-hue/discord-media-sender`** — that
+is the maintained home of the project, and it is hard-coded in
 `lib/core/constants.dart`:
 
 ```dart
-static const String githubOwner = 'tukiza7-debug';
+static const String githubOwner = 'ryujin-hue';
 static const String githubRepo = 'discord-media-sender';
 static const String latestReleaseApi =
     'https://api.github.com/repos/$githubOwner/$githubRepo/releases/latest';
