@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/float_root"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:minWidth="250dp"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:background="@drawable/widget_background">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/float_status"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Idle"
+            android:textColor="#F2F3F7"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/float_counts"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0/0 files"
+            android:textColor="#9AA1B4"
+            android:textSize="11sp" />
+
+        <ImageButton
+            android:id="@+id/float_expand"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:layout_marginStart="6dp"
+            android:background="@android:color/transparent"
+            android:contentDescription="Expand"
+            android:src="@android:drawable/ic_menu_more" />
+
+        <ImageButton
+            android:id="@+id/float_close"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:background="@android:color/transparent"
+            android:contentDescription="Close"
+            android:src="@android:drawable/ic_menu_close_clear_cancel" />
+    </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/float_progress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="6dp"
+        android:layout_marginTop="8dp"
+        android:max="100"
+        android:progress="0"
+        android:progressTint="#8B5CF6"
+        android:progressBackgroundTint="#2E3447" />
+
+    <TextView
+        android:id="@+id/float_file"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:ellipsize="middle"
+        android:maxLines="1"
+        android:text="Waiting for the next file"
+        android:textColor="#9AA1B4"
+        android:textSize="11sp" />
+
+    <LinearLayout
+        android:id="@+id/float_details"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/float_percent"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="0%"
+            android:textColor="#F2F3F7"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/float_speed"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="—"
+            android:textColor="#9AA1B4"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/float_eta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="—"
+            android:textColor="#9AA1B4"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/float_destination"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="No active destination"
+            android:textColor="#9AA1B4"
+            android:textSize="11sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/float_pause"
+                android:layout_width="0dp"
+                android:layout_height="34dp"
+                android:layout_weight="1"
+                android:background="@drawable/widget_button"
+                android:contentDescription="Pause upload"
+                android:src="@android:drawable/ic_media_pause" />
+
+            <ImageButton
+                android:id="@+id/float_resume"
+                android:layout_width="0dp"
+                android:layout_height="34dp"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:background="@drawable/widget_button"
+                android:contentDescription="Resume upload"
+                android:src="@android:drawable/ic_media_play" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

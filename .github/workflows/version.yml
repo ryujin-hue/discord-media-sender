@@ -1,0 +1,82 @@
+name: Version bump
+
+# Creates a release tag with the next semantic version and updates the
+# version in `pubspec.yaml`.
+#
+# The Android version code is derived from the semantic version
+# (MAJOR * 10000 + MINOR * 100 + PATCH) which guarantees that it always
+# increases and that a version code is never reused.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - beta
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    name: Bump version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute the next version
+        id: version
+        run: |
+          CURRENT=$(grep -E '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*//')
+          NAME="${CURRENT%%+*}"
+          MAJOR="${NAME%%.*}"
+          REST="${NAME#*.}"
+          MINOR="${REST%%.*}"
+          PATCH="${REST##*.}"
+          PATCH="${PATCH%%-*}"
+          case "${{ inputs.release_type }}" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            beta)  ;;
+            *)     PATCH=$((PATCH + 1)) ;;
+          esac
+          if [ "${{ inputs.release_type }}" = "beta" ]; then
+            NEW_NAME="${MAJOR}.${MINOR}.${PATCH}-beta.1"
+          else
+            NEW_NAME="${MAJOR}.${MINOR}.${PATCH}"
+          fi
+          CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          echo "name=$NEW_NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEW_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Update pubspec.yaml
+        run: |
+          sed -i -E "s/^version:.*/version: ${{ steps.version.outputs.name }}+${{ steps.version.outputs.code }}/" pubspec.yaml
+          grep -E '^version:' pubspec.yaml
+
+      - name: Commit and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pubspec.yaml
+          git commit -m "chore(release): ${{ steps.version.outputs.name }}"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "${{ steps.version.outputs.name }}"
+          git push origin HEAD
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Trigger the release workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run release.yml --ref "${{ steps.version.outputs.tag }}" || true

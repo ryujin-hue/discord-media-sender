@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Discord Media Sender</string>
+    <string name="overlay_channel_name">Floating overlay</string>
+    <string name="overlay_notification_text">Upload progress overlay is active</string>
+    <string name="overlay_stop">Stop</string>
+</resources>
