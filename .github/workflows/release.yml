@@ -174,7 +174,14 @@ jobs:
 
       - name: Name the asset and compute the checksum
         run: |
-          cp dist/app-release-apk dist/DiscordMediaSender.apk
+          # `download-artifact` extracts the APK as `app-release.apk`, so the
+          # file is located instead of being assumed.
+          APK="$(find dist -maxdepth 2 -name '*.apk' -type f | head -1)"
+          if [ -z "$APK" ]; then
+            echo "no APK found under dist/" >&2
+            exit 1
+          fi
+          cp "$APK" dist/DiscordMediaSender.apk
           cd dist
           sha256sum DiscordMediaSender.apk > SHA256SUMS.txt
           cat SHA256SUMS.txt
