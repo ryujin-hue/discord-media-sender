@@ -104,7 +104,7 @@ jobs:
         run: flutter pub get
 
       - name: Decode release keystore
-        if: ${{ env.DMS_KEYSTORE_BASE64 != '' }}
+        if: ${{ secrets.DMS_KEYSTORE_BASE64 != '' }}
         env:
           DMS_KEYSTORE_BASE64: ${{ secrets.DMS_KEYSTORE_BASE64 }}
         run: |
@@ -112,7 +112,7 @@ jobs:
           echo "$DMS_KEYSTORE_BASE64" | base64 --decode > android/keystore/dms-release.jks
 
       - name: Configure signing
-        if: ${{ env.DMS_KEYSTORE_BASE64 != '' }}
+        if: ${{ secrets.DMS_KEYSTORE_BASE64 != '' }}
         env:
           DMS_KEYSTORE_PASSWORD: ${{ secrets.DMS_KEYSTORE_PASSWORD }}
           DMS_KEY_ALIAS: ${{ secrets.DMS_KEY_ALIAS }}
