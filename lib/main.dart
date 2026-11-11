@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app.dart';
 import 'core/secure_store.dart';
 import 'data/database.dart';
+import 'services/foreground_manager.dart';
 import 'services/upload_engine.dart';
 import 'services/widget_bridge.dart';
 
@@ -26,8 +27,22 @@ Future<void> main() async {
 
   // Restore the queue and mirror the engine state to the Android widgets.
   final UploadEngine engine = UploadEngine.instance;
-  await engine.restore();
+  final int pendingCount = await engine.restore();
   WidgetBridge.instance.attach(engine);
 
-  runApp(const ProviderScope(child: DiscordMediaSenderApp()));
+  // Work that a killed process left behind needs the foreground service, or
+  // the system stops the app as soon as it goes to the background.
+  if (pendingCount > 0) {
+    await ForegroundManager.instance.start();
+  }
+
+  runApp(
+    ProviderScope(
+      child: DiscordMediaSenderApp(
+        // The safe resume policy decides whether the pending work is started
+        // right away or only after the user confirmed it.
+        pendingOnColdStart: pendingCount,
+      ),
+    ),
+  );
 }

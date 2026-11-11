@@ -7,6 +7,7 @@ import 'package:discord_media_sender/services/discord_api.dart';
 import 'package:discord_media_sender/services/media_service.dart';
 import 'package:discord_media_sender/services/upload_engine.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// A Discord client that records the calls instead of sending them.
@@ -15,6 +16,7 @@ class _FakeDiscordApi extends DiscordApiClient {
 
   final DiscordSendResult result;
   final List<String> sentFiles = <String>[];
+  final List<int?> receivedBandwidthCaps = <int?>[];
   int callCount = 0;
 
   @override
@@ -25,8 +27,10 @@ class _FakeDiscordApi extends DiscordApiClient {
     String? username,
     String? avatarUrl,
     void Function(int sent, int total)? onProgress,
+    int? bandwidthBytesPerSecond,
   }) async {
     callCount++;
+    receivedBandwidthCaps.add(bandwidthBytesPerSecond);
     for (final File file in files) {
       sentFiles.add(file.path);
       onProgress?.call(file.lengthSync(), file.lengthSync());
@@ -41,8 +45,10 @@ class _FakeDiscordApi extends DiscordApiClient {
     required List<File> files,
     String? content,
     void Function(int sent, int total)? onProgress,
+    int? bandwidthBytesPerSecond,
   }) async {
     callCount++;
+    receivedBandwidthCaps.add(bandwidthBytesPerSecond);
     for (final File file in files) {
       sentFiles.add(file.path);
       onProgress?.call(file.lengthSync(), file.lengthSync());
@@ -305,6 +311,140 @@ void main() {
         );
       },
     );
+
+    test('passes the bandwidth cap to the API client', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        AppConstants.prefBandwidthCapKb: 512,
+      });
+      final File file = await createFile('capped.bin', 'capped bytes');
+      final _FakeDiscordApi api = _FakeDiscordApi(
+        const DiscordSendResult(success: true, messageId: 'message-6'),
+      );
+      final UploadEngine engine = UploadEngine.createForTesting(apiClient: api);
+
+      await engine.enqueue(
+        <MediaCandidate>[MediaService.instance.describe(file.path)],
+        options: EnqueueOptions(
+          destinations: <Destination>[destination],
+          autoStart: false,
+        ),
+      );
+      await engine.run();
+
+      expect(api.receivedBandwidthCaps, hasLength(1));
+      expect(api.receivedBandwidthCaps.first, 512 * 1024);
+    });
+
+    test('runs without a bandwidth cap when none is configured', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final File file = await createFile('free.bin', 'free bytes');
+      final _FakeDiscordApi api = _FakeDiscordApi(
+        const DiscordSendResult(success: true, messageId: 'message-7'),
+      );
+      final UploadEngine engine = UploadEngine.createForTesting(apiClient: api);
+
+      await engine.enqueue(
+        <MediaCandidate>[MediaService.instance.describe(file.path)],
+        options: EnqueueOptions(
+          destinations: <Destination>[destination],
+          autoStart: false,
+        ),
+      );
+      await engine.run();
+
+      expect(api.receivedBandwidthCaps.first, isNull);
+    });
+
+    test(
+      'a fresh engine continues a queue that a dead process left behind',
+      () async {
+        final File file = await createFile(
+          'interrupted.bin',
+          'interrupted bytes',
+        );
+        final _FakeDiscordApi first = _FakeDiscordApi(
+          const DiscordSendResult(success: true, messageId: 'message-8'),
+        );
+        final UploadEngine original = UploadEngine.createForTesting(
+          apiClient: first,
+        );
+
+        await original.enqueue(
+          <MediaCandidate>[MediaService.instance.describe(file.path)],
+          options: EnqueueOptions(
+            destinations: <Destination>[destination],
+            autoStart: false,
+          ),
+        );
+        await original.run();
+        expect(first.callCount, 1);
+
+        // A new job is queued but the process dies before it is sent.
+        final File second = await createFile(
+          'interrupted2.bin',
+          'second bytes',
+        );
+        await original.enqueue(
+          <MediaCandidate>[MediaService.instance.describe(second.path)],
+          options: EnqueueOptions(
+            destinations: <Destination>[destination],
+            autoStart: false,
+          ),
+        );
+
+        // A brand new engine stands in for the restarted process. It restores
+        // the pending job from the database.
+        final _FakeDiscordApi second2 = _FakeDiscordApi(
+          const DiscordSendResult(success: true, messageId: 'message-9'),
+        );
+        final UploadEngine restarted = UploadEngine.createForTesting(
+          apiClient: second2,
+        );
+        final int pending = await restarted.restore();
+        expect(pending, 1);
+
+        // Resume has to start the queue, even though the fresh engine was never
+        // paused.
+        await restarted.resume();
+        await restarted.run();
+
+        expect(
+          second2.callCount,
+          1,
+          reason: 'the pending job is sent after the restart',
+        );
+      },
+    );
+
+    test('the native start command starts the queue', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final File file = await createFile('native.bin', 'native bytes');
+      final _FakeDiscordApi api = _FakeDiscordApi(
+        const DiscordSendResult(success: true, messageId: 'message-10'),
+      );
+      final UploadEngine engine = UploadEngine.createForTesting(apiClient: api);
+
+      await engine.enqueue(
+        <MediaCandidate>[MediaService.instance.describe(file.path)],
+        options: EnqueueOptions(
+          destinations: <Destination>[destination],
+          autoStart: false,
+        ),
+      );
+
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        UploadEngine.nativeControlKey,
+        '${DateTime.now().millisecondsSinceEpoch}:start',
+      );
+
+      await engine.run();
+      expect(
+        api.callCount,
+        1,
+        reason: 'the start command runs the pending work',
+      );
+    });
 
     test('publishes live activity events for the timeline', () async {
       final File file = await createFile('event.jpg', 'event bytes');

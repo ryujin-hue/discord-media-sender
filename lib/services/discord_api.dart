@@ -508,6 +508,7 @@ class DiscordApiClient {
     String? username,
     String? avatarUrl,
     void Function(int sent, int total)? onProgress,
+    int? bandwidthBytesPerSecond,
   }) async {
     final FormData form = FormData();
     if (content != null && content.isNotEmpty) {
@@ -529,7 +530,7 @@ class DiscordApiClient {
       form.files.add(
         MapEntry<String, MultipartFile>(
           'files[$index]',
-          MultipartFile.fromFileSync(file.path, filename: _fileName(file.path)),
+          _multipartFor(file, bandwidthBytesPerSecond),
         ),
       );
       index++;
@@ -551,6 +552,7 @@ class DiscordApiClient {
     required List<File> files,
     String? content,
     void Function(int sent, int total)? onProgress,
+    int? bandwidthBytesPerSecond,
   }) async {
     final FormData form = FormData();
     if (content != null && content.isNotEmpty) {
@@ -567,7 +569,7 @@ class DiscordApiClient {
       form.files.add(
         MapEntry<String, MultipartFile>(
           'files[$index]',
-          MultipartFile.fromFileSync(file.path, filename: _fileName(file.path)),
+          _multipartFor(file, bandwidthBytesPerSecond),
         ),
       );
       index++;
@@ -634,6 +636,50 @@ class DiscordApiClient {
         success: false,
         errorMessage: ErrorTranslator.translate(error),
       );
+    }
+  }
+
+  /// Builds the multipart entry of a file.
+  ///
+  /// Without a bandwidth cap the file is attached directly, which lets dio
+  /// stream it from the disk. With a cap the file is streamed through a
+  /// rate limiter, so the upload really is slowed down instead of only
+  /// reporting a lower speed.
+  static MultipartFile _multipartFor(File file, int? bandwidthBytesPerSecond) {
+    final String filename = _fileName(file.path);
+    final int? cap = bandwidthBytesPerSecond;
+    if (cap == null || cap <= 0) {
+      return MultipartFile.fromFileSync(file.path, filename: filename);
+    }
+    int length;
+    try {
+      length = file.lengthSync();
+    } catch (_) {
+      return MultipartFile.fromFileSync(file.path, filename: filename);
+    }
+    return MultipartFile.fromStream(
+      () => _throttledStream(file, cap),
+      length,
+      filename: filename,
+    );
+  }
+
+  /// Streams a file while holding the transfer down to [bytesPerSecond].
+  static Stream<List<int>> _throttledStream(
+    File file,
+    int bytesPerSecond,
+  ) async* {
+    final DateTime start = DateTime.now();
+    int sent = 0;
+    await for (final List<int> chunk in file.openRead()) {
+      yield chunk;
+      sent += chunk.length;
+      final int expectedMs = sent * 1000 ~/ bytesPerSecond;
+      final int elapsedMs = DateTime.now().difference(start).inMilliseconds;
+      final int delayMs = expectedMs - elapsedMs;
+      if (delayMs > 0) {
+        await Future<void>.delayed(Duration(milliseconds: delayMs));
+      }
     }
   }
 

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Origami paper plane mark">
+  <!-- Transparent background — mark only -->
+  <g transform="translate(256,256) rotate(-16) scale(1.15)">
+    <polygon fill="#F8FAFC" points="-88,12  -24,-138  88,3  56,19"/>
+    <polygon fill="#E2E8F0" points="-88,12  -8,122  88,3  56,19"/>
+    <polygon fill="#F8FAFC" points="-160,0  184,0  56,19  -88,12"/>
+    <polygon fill="#94A3B8" points="-160,0  184,0  176,5  -157,5"/>
+    <polygon fill="#8B5CF6" points="88,3  184,0  88,-8"/>
+    <line x1="-160" y1="0" x2="184" y2="0" stroke="#1E293B" stroke-width="3" stroke-linecap="round"/>
+    <line x1="-88" y1="12" x2="-24" y2="-138" stroke="#64748B" stroke-width="2" stroke-linecap="round" opacity="0.85"/>
+    <line x1="-88" y1="12" x2="-8" y2="122" stroke="#64748B" stroke-width="2" stroke-linecap="round" opacity="0.85"/>
+  </g>
+</svg>

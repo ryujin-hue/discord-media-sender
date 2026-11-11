@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Origami paper plane foreground for the adaptive launcher icon.
+  Generated from assets/brand/logo_paper_plane_icon.svg; the fold proportions are
+  preserved exactly, only the scale and position are adjusted for the 108dp
+  adaptive icon canvas and its 66dp safe zone.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#F8FAFC" android:pathData="M37.72,60.85 41.26,32.47 66.96,50.83 62.34,55.07 Z" />
+    <path android:fillColor="#E2E8F0" android:pathData="M37.72,60.85 56.53,75.53 66.96,50.83 62.34,55.07 Z" />
+    <path android:fillColor="#F8FAFC" android:pathData="M25,62.31 83,45.68 62.34,55.07 37.72,60.85 Z" />
+    <path android:fillColor="#94A3B8" android:pathData="M25,62.31 83,45.68 81.89,46.91 25.75,63.01 Z" />
+    <path android:fillColor="#A78BFA" android:pathData="M66.96,50.83 83,45.68 66.43,48.97 Z" />
+    <path android:strokeColor="#1E293B" android:strokeWidth="0.8" android:strokeLineCap="round" android:pathData="M25,62.31 L83,45.68" />
+    <path android:strokeColor="#64748B" android:strokeWidth="0.53" android:strokeLineCap="round" android:pathData="M37.72,60.85 L41.26,32.47" />
+    <path android:strokeColor="#64748B" android:strokeWidth="0.53" android:strokeLineCap="round" android:pathData="M37.72,60.85 L56.53,75.53" />
+</vector>

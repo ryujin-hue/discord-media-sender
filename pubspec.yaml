@@ -1,5 +1,5 @@
 name: discord_media_sender
-description: "Discord Media Sender 2.0 — smart, multi-destination media delivery for Discord."
+description: "Discord Media Sender 2.1 — smart, multi-destination media delivery for Discord."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 2.0.0+20000
+version: 2.1.0+20100
 
 environment:
   sdk: ^3.13.7
@@ -56,6 +56,7 @@ dependencies:
   image: ^4.12.0
   convert: ^3.1.2
   file_picker: ^13.3.2
+  flutter_svg: ^2.0.10
   path_provider_android: 2.2.17
   shared_preferences_android: 2.4.12
 
@@ -81,6 +82,9 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/brand/
 
   fonts:
     - family: Inter

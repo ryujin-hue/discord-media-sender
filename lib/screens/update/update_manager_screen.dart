@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../core/constants.dart';
 import '../../core/formatters.dart';
@@ -31,10 +32,39 @@ class _UpdateManagerScreenState extends ConsumerState<UpdateManagerScreen> {
   String? _installError;
   String _channel = 'stable';
 
+  /// The application id of the running build.
+  String? _packageId;
+
+  /// The version code of the running build.
+  int? _installedVersionCode;
+
   @override
   void initState() {
     super.initState();
+    unawaited(_loadIdentity());
     unawaited(_check(force: true));
+  }
+
+  /// Reads the identity of the running build.
+  ///
+  /// The gates of the update check report "unknown" when these values are
+  /// missing, never a pass that did not happen.
+  Future<void> _loadIdentity() async {
+    String? packageId;
+    int? versionCode;
+    try {
+      final PackageInfo info = await PackageInfo.fromPlatform();
+      packageId = info.packageName;
+      versionCode = int.tryParse(info.buildNumber);
+    } catch (_) {
+      // The identity is optional on a platform without the plugin.
+    }
+    versionCode ??= await UpdateService.instance.currentVersionCode();
+    if (!mounted) return;
+    setState(() {
+      _packageId = packageId;
+      _installedVersionCode = versionCode;
+    });
   }
 
   Future<void> _check({required bool force}) async {
@@ -122,17 +152,16 @@ class _UpdateManagerScreenState extends ConsumerState<UpdateManagerScreen> {
       appBar: AppBar(title: const Text('Update manager')),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
           children: <Widget>[
             SectionCard(
               title: 'Update status',
-              subtitle: 'Checks GitHub releases for a newer build',
+              subtitle: 'GitHub releases of this repository',
               icon: Icons.system_update_rounded,
               trailing: available
                   ? const StatusPill(
                       label: 'Update available',
                       color: AppConstants.colorSuccess,
-                      icon: Icons.new_releases_rounded,
                     )
                   : null,
               child: Column(
@@ -163,23 +192,16 @@ class _UpdateManagerScreenState extends ConsumerState<UpdateManagerScreen> {
                       ),
                     ),
                   ],
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
-                    child: FilledButton.icon(
+                    child: FilledButton(
                       onPressed: _checking
                           ? null
                           : () {
                               unawaited(_check(force: true));
                             },
-                      icon: _checking
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.refresh_rounded, size: 18),
-                      label: Text(
+                      child: Text(
                         _checking ? 'Checking…' : 'Check for updates',
                       ),
                     ),
@@ -187,7 +209,23 @@ class _UpdateManagerScreenState extends ConsumerState<UpdateManagerScreen> {
                 ],
               ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
+            SectionCard(
+              title: 'Gates',
+              subtitle: 'SHA-256, application id, version code',
+              icon: Icons.shield_rounded,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  _GateRow(gate: _shaGate(download)),
+                  const SizedBox(height: 8),
+                  _GateRow(gate: _packageGate()),
+                  const SizedBox(height: 8),
+                  _GateRow(gate: _versionGate(result)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
             SectionCard(
               title: 'Release channel',
               subtitle: 'Beta builds are published as pre-releases',
@@ -205,7 +243,7 @@ class _UpdateManagerScreenState extends ConsumerState<UpdateManagerScreen> {
                 },
               ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             SectionCard(
               title: 'Release notes',
               icon: Icons.description_rounded,
@@ -216,10 +254,10 @@ class _UpdateManagerScreenState extends ConsumerState<UpdateManagerScreen> {
               ),
             ),
             if (available && result?.release != null) ...<Widget>[
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
               SectionCard(
                 title: 'Download',
-                subtitle: 'The APK is verified against the published checksum',
+                subtitle: 'Verified against the published SHA-256',
                 icon: Icons.download_rounded,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -243,24 +281,27 @@ class _UpdateManagerScreenState extends ConsumerState<UpdateManagerScreen> {
                       const SizedBox(height: 12),
                     ],
                     if (download != null && !download.success) ...<Widget>[
-                      Text(
-                        download.error ?? 'The update could not be downloaded.',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: AppConstants.colorError,
+                      if (_isHashMismatch(download))
+                        _HashMismatchNotice(download: download)
+                      else
+                        Text(
+                          download.error ??
+                              'The update could not be downloaded.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: AppConstants.colorError,
+                          ),
                         ),
-                      ),
                       const SizedBox(height: 12),
                     ],
                     SizedBox(
                       width: double.infinity,
-                      child: FilledButton.icon(
+                      child: FilledButton(
                         onPressed: _downloading
                             ? null
                             : () {
                                 unawaited(_downloadUpdate());
                               },
-                        icon: const Icon(Icons.download_rounded, size: 18),
-                        label: Text(
+                        child: Text(
                           _downloading ? 'Downloading…' : 'Download update',
                         ),
                       ),
@@ -270,7 +311,7 @@ class _UpdateManagerScreenState extends ConsumerState<UpdateManagerScreen> {
               ),
             ],
             if (download != null && download.success) ...<Widget>[
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
               SectionCard(
                 title: 'Install',
                 subtitle: 'The checksum of the downloaded APK matched',
@@ -293,18 +334,14 @@ class _UpdateManagerScreenState extends ConsumerState<UpdateManagerScreen> {
                       'the temporary folder.',
                       style: theme.textTheme.labelSmall,
                     ),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 12),
                     SizedBox(
                       width: double.infinity,
-                      child: FilledButton.icon(
+                      child: FilledButton(
                         onPressed: () {
                           unawaited(_installUpdate());
                         },
-                        icon: const Icon(
-                          Icons.install_mobile_rounded,
-                          size: 18,
-                        ),
-                        label: const Text('Install update'),
+                        child: const Text('Install update'),
                       ),
                     ),
                     if (_installMessage != null) ...<Widget>[
@@ -329,7 +366,7 @@ class _UpdateManagerScreenState extends ConsumerState<UpdateManagerScreen> {
                 ),
               ),
             ],
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             SectionCard(
               title: 'Update history',
               subtitle: _history.isEmpty
@@ -338,8 +375,7 @@ class _UpdateManagerScreenState extends ConsumerState<UpdateManagerScreen> {
               icon: Icons.history_rounded,
               child: _history.isEmpty
                   ? Text(
-                      'Every update check is stored locally so that you can '
-                      'review what happened.',
+                      'Every update check is stored locally.',
                       style: theme.textTheme.bodySmall,
                     )
                   : Column(
@@ -349,14 +385,14 @@ class _UpdateManagerScreenState extends ConsumerState<UpdateManagerScreen> {
                       ],
                     ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             SectionCard(
               title: 'Safe updates',
               icon: Icons.shield_rounded,
               child: Text(
-                'Updates are verified against the published SHA-256 checksum '
-                'and must have the same application id and a higher version '
-                'code. Android always asks the user to approve the '
+                'The APK is verified against the published SHA-256 checksum. '
+                'The installer requires the same application id and a higher '
+                'version code. Android asks for the approval of every '
                 'installation.',
                 style: theme.textTheme.bodySmall,
               ),
@@ -366,7 +402,207 @@ class _UpdateManagerScreenState extends ConsumerState<UpdateManagerScreen> {
       ),
     );
   }
+
+  /// Whether the downloaded file does not match the published checksum.
+  bool _isHashMismatch(UpdateDownloadResult download) =>
+      (download.error ?? '').toLowerCase().contains('mismatch');
+
+  /// The state of the SHA-256 gate.
+  _Gate _shaGate(UpdateDownloadResult? download) {
+    if (download == null) {
+      return const _Gate(
+        'SHA-256',
+        'Not checked',
+        AppConstants.colorTextSecondary,
+        'The APK is verified against the published SHA-256 after the '
+            'download.',
+      );
+    }
+    if (download.success) {
+      return const _Gate(
+        'SHA-256',
+        'Verified',
+        AppConstants.colorSuccess,
+        'The downloaded file matches the published SHA-256.',
+      );
+    }
+    if (_isHashMismatch(download)) {
+      return const _Gate(
+        'SHA-256',
+        'Mismatch',
+        AppConstants.colorError,
+        'The downloaded file does not match the published SHA-256. The file '
+            'was deleted and no update was installed.',
+      );
+    }
+    return _Gate(
+      'SHA-256',
+      'Not verified',
+      AppConstants.colorError,
+      download.error ?? 'The APK could not be verified.',
+    );
+  }
+
+  /// The state of the application id gate.
+  _Gate _packageGate() {
+    final String? packageId = _packageId;
+    if (packageId == null) {
+      return const _Gate(
+        'Application id',
+        'Unknown',
+        AppConstants.colorTextSecondary,
+        'The application id of the running build could not be read.',
+      );
+    }
+    if (packageId == AppConstants.applicationId) {
+      return _Gate(
+        'Application id',
+        'Match',
+        AppConstants.colorSuccess,
+        'Running build: $packageId. The installer checks the id of the APK '
+            'again.',
+      );
+    }
+    if (packageId == '${AppConstants.applicationId}.debug') {
+      return _Gate(
+        'Application id',
+        'Debug build',
+        AppConstants.colorWarning,
+        'Running build: $packageId. The installer checks the id of the APK '
+            'again.',
+      );
+    }
+    return _Gate(
+      'Application id',
+      'Mismatch',
+      AppConstants.colorError,
+      'Running build: $packageId.',
+    );
+  }
+
+  /// The state of the version code gate.
+  _Gate _versionGate(UpdateCheckResult? result) {
+    final GithubRelease? release = result?.release;
+    if (release == null) {
+      return const _Gate(
+        'Version code',
+        'Unknown',
+        AppConstants.colorTextSecondary,
+        'No release to compare the version code with.',
+      );
+    }
+    final int? installed = _installedVersionCode;
+    final int published = UpdateService.versionCodeFromTag(release.version);
+    if (installed == null || published <= 0) {
+      return const _Gate(
+        'Version code',
+        'Unknown',
+        AppConstants.colorTextSecondary,
+        'The version code of the running build could not be read.',
+      );
+    }
+    if (published > installed) {
+      return _Gate(
+        'Version code',
+        'Newer',
+        AppConstants.colorSuccess,
+        'Published $published · installed $installed',
+      );
+    }
+    return _Gate(
+      'Version code',
+      'Not newer',
+      AppConstants.colorWarning,
+      'Published $published · installed $installed',
+    );
+  }
 }
+
+// -----------------------------------------------------------------------------
+// Gates
+// -----------------------------------------------------------------------------
+
+/// The state of one gate of the update check.
+class _Gate {
+  const _Gate(this.name, this.label, this.color, this.detail);
+
+  /// The name of the gate, for example `SHA-256`.
+  final String name;
+
+  /// The state of the gate, for example `Verified`.
+  final String label;
+
+  final Color color;
+  final String detail;
+}
+
+/// A gate with its state and its explanation.
+class _GateRow extends StatelessWidget {
+  const _GateRow({required this.gate});
+
+  final _Gate gate;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        MetricRow(label: gate.name, value: gate.label, valueColor: gate.color),
+        Text(gate.detail, style: theme.textTheme.labelSmall),
+      ],
+    );
+  }
+}
+
+/// The notice shown when the downloaded file does not match the checksum.
+class _HashMismatchNotice extends StatelessWidget {
+  const _HashMismatchNotice({required this.download});
+
+  final UpdateDownloadResult download;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppConstants.colorError.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppConstants.colorError.withValues(alpha: 0.45),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            'SHA-256 mismatch',
+            style: theme.textTheme.titleSmall?.copyWith(
+              color: AppConstants.colorError,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'The downloaded file does not match the published SHA-256. The '
+            'file was deleted and the update was not installed.',
+            style: theme.textTheme.bodySmall,
+          ),
+          if (download.sha256 != null) ...<Widget>[
+            const SizedBox(height: 8),
+            Text('Computed SHA-256', style: theme.textTheme.labelSmall),
+            const SizedBox(height: 2),
+            Text(download.sha256!, style: theme.textTheme.bodySmall),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// History
+// -----------------------------------------------------------------------------
 
 /// A single recorded update check.
 class _UpdateHistoryRow extends StatelessWidget {
@@ -385,7 +621,7 @@ class _UpdateHistoryRow extends StatelessWidget {
     };
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[

@@ -1,7 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants.dart';
@@ -11,8 +11,9 @@ import '../../data/models.dart';
 import '../../providers/config_providers.dart';
 import '../../services/archive_service.dart';
 import '../../widgets/common.dart';
+import '../../widgets/library_helpers.dart';
 
-/// The sort orders offered by the library grid.
+/// The sort orders offered by the library list.
 enum _LibrarySort {
   newest('Newest'),
   name('Name'),
@@ -26,12 +27,15 @@ enum _LibrarySort {
   final String label;
 }
 
-/// The media library — every file the app has tracked.
+/// The media library — a local index of every file the app has tracked.
 ///
 /// The screen offers a free text search (name *or* path), category filters,
-/// a favourites filter, an archived filter, five sort orders and a responsive
-/// grid of tiles. Tapping a tile opens a detail sheet with the full metadata
-/// of the entry and the actions that can be applied to it.
+/// a favourites filter, an archived filter, five sort orders and a dense list
+/// of entries. Tapping an entry opens a detail sheet with the path, the
+/// SHA-256 digest and the actions that can be applied to it.
+///
+/// The library is a *local* index. It lives in the database of the device, the
+/// files stay on the device and no copy of the index exists on a server.
 class LibraryScreen extends ConsumerWidget {
   const LibraryScreen({super.key});
 
@@ -169,6 +173,16 @@ class _LibraryBodyState extends ConsumerState<_LibraryBody> {
     });
   }
 
+  /// Removes every filter, including the search query.
+  void _resetFilters() {
+    _clearSearch();
+    setState(() {
+      _category = 'all';
+      _favoritesOnly = false;
+      _archivedOnly = false;
+    });
+  }
+
   Future<void> _toggleFavorite(MediaLibraryEntry entry) async {
     await AppDatabase.instance.upsertMedia(
       entry.copyWith(favorite: !entry.favorite),
@@ -209,7 +223,6 @@ class _LibraryBodyState extends ConsumerState<_LibraryBody> {
 
   @override
   Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
     final List<MediaLibraryEntry> all =
         ref.watch(mediaLibraryProvider).value ?? const <MediaLibraryEntry>[];
     final List<MediaLibraryEntry> source = _searchResults ?? all;
@@ -228,148 +241,70 @@ class _LibraryBodyState extends ConsumerState<_LibraryBody> {
           total: all.length,
           bytes: totalBytes,
         ),
-        const SizedBox(height: 16),
-        TextField(
+        const SizedBox(height: 14),
+        _LibraryFilters(
+          query: _query,
           controller: _searchController,
-          onChanged: _onSearchChanged,
-          textInputAction: TextInputAction.search,
-          decoration: InputDecoration(
-            hintText: 'Search by name or path',
-            prefixIcon: const Icon(Icons.search_rounded, size: 20),
-            suffixIcon: _query.isEmpty
-                ? null
-                : IconButton(
-                    icon: const Icon(Icons.close_rounded, size: 18),
-                    tooltip: 'Clear search',
-                    onPressed: _clearSearch,
-                  ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        _CategoryChips(
-          selected: _category,
-          onSelected: (String value) => setState(() => _category = value),
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: <Widget>[
-            FilterChip(
-              selected: _favoritesOnly,
-              avatar: Icon(
-                _favoritesOnly ? Icons.star_rounded : Icons.star_border_rounded,
-                size: 16,
-                color: _favoritesOnly
-                    ? AppConstants.colorWarning
-                    : theme.colorScheme.onSurfaceVariant,
-              ),
-              label: const Text('Favorites'),
-              onSelected: (bool value) =>
-                  setState(() => _favoritesOnly = value),
-            ),
-            const SizedBox(width: 8),
-            FilterChip(
-              selected: _archivedOnly,
-              avatar: Icon(
-                _archivedOnly
-                    ? Icons.inventory_2_rounded
-                    : Icons.inventory_2_outlined,
-                size: 16,
-                color: _archivedOnly
-                    ? AppConstants.colorPrimary
-                    : theme.colorScheme.onSurfaceVariant,
-              ),
-              label: const Text('Archived'),
-              onSelected: (bool value) => setState(() => _archivedOnly = value),
-            ),
-            const Spacer(),
-            PopupMenuButton<_LibrarySort>(
-              initialValue: _sort,
-              tooltip: 'Sort library',
-              onSelected: (_LibrarySort value) => setState(() => _sort = value),
-              itemBuilder: (BuildContext context) =>
-                  <PopupMenuEntry<_LibrarySort>>[
-                    for (final _LibrarySort option in _LibrarySort.values)
-                      PopupMenuItem<_LibrarySort>(
-                        value: option,
-                        child: Text(option.label),
-                      ),
-                  ],
-              child: Chip(
-                avatar: const Icon(Icons.sort_rounded, size: 16),
-                label: Text(_sort.label),
-              ),
-            ),
-          ],
+          category: _category,
+          favoritesOnly: _favoritesOnly,
+          archivedOnly: _archivedOnly,
+          sort: _sort,
+          onSearchChanged: _onSearchChanged,
+          onClearSearch: _clearSearch,
+          onCategoryChanged: (String value) =>
+              setState(() => _category = value),
+          onFavoritesChanged: (bool value) =>
+              setState(() => _favoritesOnly = value),
+          onArchivedChanged: (bool value) =>
+              setState(() => _archivedOnly = value),
+          onSortChanged: (_LibrarySort value) => setState(() => _sort = value),
         ),
         const SizedBox(height: 14),
         if (all.isEmpty)
           SizedBox(
-            height: 320,
+            height: 300,
             child: EmptyState(
               icon: Icons.perm_media_outlined,
-              title: 'Your library is empty',
+              title: 'No files tracked yet',
               message:
-                  'Files are added to the library automatically when you send '
-                  'them to Discord from the Upload tab.',
-              action: FilledButton.tonalIcon(
+                  'Files enter this local index when they are sent to Discord '
+                  'from the Upload tab.',
+              action: FilledButton(
                 onPressed: () => showAppSnack(
                   context,
-                  'Open the Upload tab, pick the files you want to send and '
-                  'they will appear here.',
+                  'Open the Upload tab and pick the files to send. Every sent '
+                  'file is added to this local index.',
                 ),
-                icon: const Icon(Icons.cloud_upload_rounded, size: 18),
-                label: const Text('How to add files'),
+                child: const Text('Add files'),
               ),
             ),
           )
         else if (visible.isEmpty)
           SizedBox(
-            height: 320,
+            height: 300,
             child: EmptyState(
               icon: Icons.search_off_rounded,
-              title: 'No files match',
-              message:
-                  'No library entry matches the current search and filters.',
-              action: OutlinedButton.icon(
-                onPressed: () {
-                  _clearSearch();
-                  setState(() {
-                    _category = 'all';
-                    _favoritesOnly = false;
-                    _archivedOnly = false;
-                  });
-                },
-                icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
-                label: const Text('Clear filters'),
+              title: 'No file matches',
+              message: 'No file matches the current search and filters.',
+              action: OutlinedButton(
+                onPressed: _resetFilters,
+                child: const Text('Clear filters'),
               ),
             ),
           )
         else
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 160,
-              childAspectRatio: 0.85,
-              mainAxisSpacing: 10,
-              crossAxisSpacing: 10,
+          for (final MediaLibraryEntry entry in visible)
+            _LibraryEntryRow(
+              entry: entry,
+              onOpen: () => _openDetails(entry),
+              onToggleFavorite: () => _toggleFavorite(entry),
             ),
-            itemCount: visible.length,
-            itemBuilder: (BuildContext context, int index) {
-              final MediaLibraryEntry entry = visible[index];
-              return _LibraryTile(
-                entry: entry,
-                onOpen: () => _openDetails(entry),
-                onToggleFavorite: () => _toggleFavorite(entry),
-              );
-            },
-          ),
       ],
     );
   }
 }
 
-/// The title of the library screen together with the current item count.
+/// The title of the library screen together with the size of the index.
 class _LibraryHeader extends StatelessWidget {
   const _LibraryHeader({
     required this.count,
@@ -384,49 +319,125 @@ class _LibraryHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final String subtitle = count == total
-        ? '${Formatters.count(count)} items'
-        : '${Formatters.count(count)} of ${Formatters.count(total)} items';
+    final String files = count == total
+        ? '${Formatters.count(count)} files'
+        : '${Formatters.count(count)} of ${Formatters.count(total)} files';
 
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text('Media library', style: theme.textTheme.headlineMedium),
-              const SizedBox(height: 2),
-              Text(subtitle, style: theme.textTheme.bodySmall),
-            ],
-          ),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: AppConstants.colorPrimary.withValues(alpha: 0.14),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              const Icon(
-                Icons.sd_storage_rounded,
-                size: 14,
-                color: AppConstants.colorPrimary,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                Formatters.bytes(bytes),
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: AppConstants.colorPrimary,
-                ),
-              ),
-            ],
-          ),
+        Text('Media library', style: theme.textTheme.titleMedium),
+        const SizedBox(height: 2),
+        Text(
+          'Local index · $files · ${Formatters.bytes(bytes)}',
+          style: theme.textTheme.bodySmall,
         ),
       ],
+    );
+  }
+}
+
+/// The search field, the category filter and the sort order.
+class _LibraryFilters extends StatelessWidget {
+  const _LibraryFilters({
+    required this.query,
+    required this.controller,
+    required this.category,
+    required this.favoritesOnly,
+    required this.archivedOnly,
+    required this.sort,
+    required this.onSearchChanged,
+    required this.onClearSearch,
+    required this.onCategoryChanged,
+    required this.onFavoritesChanged,
+    required this.onArchivedChanged,
+    required this.onSortChanged,
+  });
+
+  final String query;
+  final TextEditingController controller;
+  final String category;
+  final bool favoritesOnly;
+  final bool archivedOnly;
+  final _LibrarySort sort;
+  final ValueChanged<String> onSearchChanged;
+  final VoidCallback onClearSearch;
+  final ValueChanged<String> onCategoryChanged;
+  final ValueChanged<bool> onFavoritesChanged;
+  final ValueChanged<bool> onArchivedChanged;
+  final ValueChanged<_LibrarySort> onSortChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+
+    return SectionCard(
+      title: 'Filters',
+      subtitle: category == 'all'
+          ? 'All categories'
+          : MediaCategory.fromKey(category).label,
+      icon: Icons.filter_alt_rounded,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          TextField(
+            controller: controller,
+            onChanged: onSearchChanged,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              hintText: 'Search by name or path',
+              prefixIcon: const Icon(Icons.search_rounded, size: 20),
+              suffixIcon: query.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      tooltip: 'Clear search',
+                      onPressed: onClearSearch,
+                    ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _CategoryChips(selected: category, onSelected: onCategoryChanged),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              FilterChip(
+                selected: favoritesOnly,
+                label: const Text('Favorites'),
+                onSelected: onFavoritesChanged,
+              ),
+              FilterChip(
+                selected: archivedOnly,
+                label: const Text('Archived'),
+                onSelected: onArchivedChanged,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: <Widget>[
+              Text('Sort', style: theme.textTheme.bodySmall),
+              const SizedBox(width: 8),
+              PopupMenuButton<_LibrarySort>(
+                tooltip: 'Sort library',
+                initialValue: sort,
+                onSelected: onSortChanged,
+                itemBuilder: (BuildContext context) =>
+                    <PopupMenuEntry<_LibrarySort>>[
+                      for (final _LibrarySort option in _LibrarySort.values)
+                        PopupMenuItem<_LibrarySort>(
+                          value: option,
+                          child: Text(option.label),
+                        ),
+                    ],
+                child: Chip(label: Text(sort.label)),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -474,9 +485,9 @@ class _CategoryChips extends StatelessWidget {
   }
 }
 
-/// A single library entry rendered as a grid tile.
-class _LibraryTile extends StatelessWidget {
-  const _LibraryTile({
+/// A single library entry: thumbnail or type icon, name, size and status.
+class _LibraryEntryRow extends StatelessWidget {
+  const _LibraryEntryRow({
     required this.entry,
     required this.onOpen,
     required this.onToggleFavorite,
@@ -491,74 +502,100 @@ class _LibraryTile extends StatelessWidget {
     final ThemeData theme = Theme.of(context);
     final StatusStyle status = StatusStyle.forMediaStatus(entry.status);
 
-    return Card(
-      child: InkWell(
-        onTap: onOpen,
-        borderRadius: BorderRadius.circular(18),
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Row(
+    return InkWell(
+      onTap: onOpen,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          children: <Widget>[
+            _LibraryThumb(entry: entry),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Icon(
-                    iconForCategory(entry.category),
-                    size: 20,
-                    color: theme.colorScheme.primary,
+                  Text(
+                    entry.name,
+                    style: theme.textTheme.bodyMedium,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  const Spacer(),
-                  IconButton(
-                    onPressed: onToggleFavorite,
-                    tooltip: entry.favorite
-                        ? 'Remove from favorites'
-                        : 'Add to favorites',
-                    icon: Icon(
-                      entry.favorite
-                          ? Icons.star_rounded
-                          : Icons.star_border_rounded,
-                      size: 19,
-                      color: entry.favorite
-                          ? AppConstants.colorWarning
-                          : theme.colorScheme.onSurfaceVariant,
-                    ),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(
-                      minWidth: 28,
-                      minHeight: 28,
-                    ),
-                    visualDensity: VisualDensity.compact,
+                  const SizedBox(height: 4),
+                  Row(
+                    children: <Widget>[
+                      Text(
+                        Formatters.bytes(entry.size),
+                        style: theme.textTheme.bodySmall,
+                      ),
+                      const SizedBox(width: 8),
+                      StatusPill(label: status.label, color: status.color),
+                    ],
                   ),
                 ],
               ),
-              const SizedBox(height: 4),
-              Expanded(
-                child: Text(
-                  entry.name,
-                  style: theme.textTheme.titleSmall,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
+            ),
+            IconButton(
+              onPressed: onToggleFavorite,
+              tooltip: entry.favorite
+                  ? 'Remove from favorites'
+                  : 'Add to favorites',
+              icon: Icon(
+                entry.favorite ? Icons.star_rounded : Icons.star_border_rounded,
+                size: 18,
+                color: entry.favorite
+                    ? AppConstants.colorWarning
+                    : theme.colorScheme.onSurfaceVariant,
               ),
-              Text(
-                Formatters.bytes(entry.size),
-                style: theme.textTheme.labelSmall,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 6),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: StatusPill(
-                  label: status.label,
-                  color: status.color,
-                  icon: status.icon,
-                ),
-              ),
-            ],
-          ),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              visualDensity: VisualDensity.compact,
+            ),
+          ],
         ),
       ),
+    );
+  }
+}
+
+/// The preview of a library entry.
+///
+/// The stored thumbnail is used when the entry has one, every other entry
+/// falls back to the icon of its file type.
+class _LibraryThumb extends StatelessWidget {
+  const _LibraryThumb({required this.entry});
+
+  final MediaLibraryEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final Widget placeholder = Icon(
+      iconForCategory(entry.category),
+      size: 20,
+      color: theme.colorScheme.primary,
+    );
+    final String? thumbnail = entry.thumbnailPath;
+
+    return Container(
+      width: 40,
+      height: 40,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primary.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: thumbnail == null || thumbnail.isEmpty
+          ? placeholder
+          : Image.file(
+              File(thumbnail),
+              fit: BoxFit.cover,
+              errorBuilder: (
+                BuildContext context,
+                Object error,
+                StackTrace? stackTrace,
+              ) => placeholder,
+            ),
     );
   }
 }
@@ -635,168 +672,93 @@ class _LibraryDetailsState extends State<_LibraryDetails> {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Text(_entry.name, style: theme.textTheme.titleLarge),
-          const SizedBox(height: 4),
-          Text(
-            MediaCategory.fromKey(_entry.category).label,
-            style: theme.textTheme.bodySmall,
-          ),
-          const SizedBox(height: 12),
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              StatusPill(
-                label: status.label,
-                color: status.color,
-                icon: status.icon,
+              Expanded(
+                child: Text(_entry.name, style: theme.textTheme.titleMedium),
               ),
-              const Spacer(),
-              TextButton.icon(
-                onPressed: _toggleFavorite,
-                icon: Icon(
-                  _entry.favorite
-                      ? Icons.star_rounded
-                      : Icons.star_border_rounded,
-                  size: 16,
-                  color: _entry.favorite
-                      ? AppConstants.colorWarning
-                      : theme.colorScheme.onSurfaceVariant,
-                ),
-                label: Text(_entry.favorite ? 'Favorited' : 'Add to favorites'),
-              ),
+              const SizedBox(width: 8),
+              StatusPill(label: status.label, color: status.color),
             ],
           ),
-          const SizedBox(height: 16),
-          _DetailField(
-            label: 'Path',
-            value: _entry.path.isEmpty ? '—' : _entry.path,
+          const SizedBox(height: 4),
+          Text(
+            '${MediaCategory.fromKey(_entry.category).label} · '
+            '${Formatters.bytes(_entry.size)}',
+            style: theme.textTheme.bodySmall,
           ),
-          const SizedBox(height: 12),
-          _DetailField(label: 'Size', value: Formatters.bytes(_entry.size)),
-          const SizedBox(height: 12),
-          _DetailField(label: 'MIME type', value: _entry.mimeType ?? '—'),
-          const SizedBox(height: 12),
-          _DetailField(
-            label: 'Category',
-            value: MediaCategory.fromKey(_entry.category).label,
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _toggleFavorite,
+              icon: Icon(
+                _entry.favorite
+                    ? Icons.star_rounded
+                    : Icons.star_border_rounded,
+                size: 16,
+                color: _entry.favorite
+                    ? AppConstants.colorWarning
+                    : theme.colorScheme.onSurfaceVariant,
+              ),
+              label: Text(_entry.favorite ? 'Favorited' : 'Add to favorites'),
+            ),
           ),
-          const SizedBox(height: 12),
-          _DetailField(label: 'Status', value: status.label),
-          const SizedBox(height: 12),
-          _DetailField(
-            label: 'Favorite',
-            value: _entry.favorite ? 'Yes' : 'No',
-          ),
-          const SizedBox(height: 12),
-          _DetailField(label: 'Added', value: _formatTimestamp(_entry.addedAt)),
-          const SizedBox(height: 12),
-          _DetailField(
+          const SizedBox(height: 4),
+          MetricRow(label: 'MIME type', value: _entry.mimeType ?? '—'),
+          MetricRow(label: 'Added', value: _formatTimestamp(_entry.addedAt)),
+          MetricRow(
             label: 'Modified',
             value: _formatTimestamp(_entry.modifiedAt),
           ),
-          const SizedBox(height: 12),
-          _DetailField(
+          MetricRow(
             label: 'Last activity',
             value: _formatTimestamp(_entry.lastActivityAt),
           ),
           const SizedBox(height: 12),
-          _DetailField(
+          Text('Location', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 4),
+          DetailValueRow(
+            label: 'Path',
+            value: _entry.path.isEmpty ? '—' : _entry.path,
+          ),
+          const SizedBox(height: 12),
+          Text('Integrity', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 4),
+          DetailValueRow(
             label: 'SHA-256',
             value: _entry.sha256 ?? 'Not calculated yet',
             monospace: true,
             copyable: _entry.sha256 != null,
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
           Wrap(
-            spacing: 10,
-            runSpacing: 10,
+            spacing: 8,
+            runSpacing: 8,
             children: <Widget>[
-              FilledButton.icon(
+              FilledButton(
                 onPressed: () {
-                  Navigator.of(context).pop();
                   showAppSnack(
                     context,
                     'Use the Upload tab to send this file to Discord.',
                   );
+                  Navigator.of(context).pop();
                 },
-                icon: const Icon(Icons.cloud_upload_rounded, size: 18),
-                label: const Text('Upload to Discord'),
+                child: const Text('Upload to Discord'),
               ),
-              OutlinedButton.icon(
-                onPressed: _archive,
-                icon: const Icon(Icons.inventory_2_outlined, size: 18),
-                label: const Text('Archive'),
-              ),
-              OutlinedButton.icon(
+              OutlinedButton(onPressed: _archive, child: const Text('Archive')),
+              OutlinedButton(
                 onPressed: _delete,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: AppConstants.colorError,
                 ),
-                icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                label: const Text('Delete from library'),
+                child: const Text('Delete from library'),
               ),
             ],
           ),
         ],
       ),
-    );
-  }
-}
-
-/// A labelled value row inside the detail sheet.
-///
-/// Long values (paths, hashes) are selectable and can optionally be copied to
-/// the clipboard.
-class _DetailField extends StatelessWidget {
-  const _DetailField({
-    required this.label,
-    required this.value,
-    this.monospace = false,
-    this.copyable = false,
-  });
-
-  final String label;
-  final String value;
-  final bool monospace;
-  final bool copyable;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final TextStyle? valueStyle = monospace
-        ? theme.textTheme.bodyMedium?.copyWith(
-            fontFamily: 'monospace',
-            fontSize: 12,
-          )
-        : theme.textTheme.bodyLarge;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Text(label, style: theme.textTheme.labelSmall),
-        const SizedBox(height: 2),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Expanded(child: SelectableText(value, style: valueStyle)),
-            if (copyable)
-              IconButton(
-                tooltip: 'Copy $label',
-                onPressed: () {
-                  Clipboard.setData(ClipboardData(text: value));
-                  showAppSnack(
-                    context,
-                    '$label copied to clipboard',
-                    isSuccess: true,
-                  );
-                },
-                icon: const Icon(Icons.copy_rounded, size: 16),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                visualDensity: VisualDensity.compact,
-              ),
-          ],
-        ),
-      ],
     );
   }
 }

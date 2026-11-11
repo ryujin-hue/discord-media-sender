@@ -108,3 +108,67 @@ second upload path. The two isolates coordinate through the database (`engine_pa
 `google_fonts` 9.x targets the split-out `material_ui` package and does not compile against
 Flutter 3.47.9. Bundling the fonts is also the better production choice: the app renders
 correctly offline and never contacts `fonts.gstatic.com` at runtime.
+
+---
+
+## 2.1 changes
+
+### The upload lifecycle
+
+The 2.0 build started the queue without the foreground service and guarded the resume with
+`if (!_paused) return`. A fresh process is never marked as paused, so the resume was a no-op
+and a killed upload stayed dead. The 2.1 lifecycle is:
+
+```
+enqueue ──> run() ──> ForegroundManager.start()
+                │
+                └── ForegroundService isolate ──> same UploadEngine, same queue
+```
+
+- `enqueue()` starts the engine **and** the foreground service together.
+- `resume()` always clears the pause flag and starts the queue when work is pending, even
+  after a process death.
+- The native `start` command does the same, so a widget can revive a queue whose process was
+  killed.
+- On a cold start `main()` restores the queue and starts the foreground service when
+  something is still pending. The *safe resume* policy decides whether the queue is then
+  started right away, after a prompt, or not at all.
+
+### The speed and the ETA
+
+The speed is the average since the start of the current job:
+
+```
+speed = sentBytes / secondsSinceJobStart
+eta   = (totalBytes - sentBytes) / speed
+```
+
+An instantaneous sample jumps around on a steady transfer and makes the ETA useless.
+
+### The bandwidth cap
+
+The cap is a global limit in KB/s. It is applied where the file is attached to the request:
+the file is streamed through a rate limiter instead of being handed to the HTTP client as a
+plain file, so the transfer really is slowed down. The cap never replaces the Discord rate
+limits; both apply.
+
+### The control bus
+
+The native side never uploads. It reads the mirrored state from `UploadStateStore` and writes
+a command into `dms_control_command`:
+
+```
+{epochMs}:{pause|resume|start|cancel}
+```
+
+The timestamp makes the command idempotent across the two Dart isolates. `resume` and `start`
+both call `run()` when work is pending — that is what makes the widget a real control.
+
+### The overlay
+
+The floating overlay is a view onto the same state store. Two rules matter:
+
+- Dismissing the overlay only removes the panel. It never cancels an upload and never stops
+  the foreground service.
+- The overlay auto-hides while the engine is idle and the queue is empty, and reappears as
+  soon as there is work.

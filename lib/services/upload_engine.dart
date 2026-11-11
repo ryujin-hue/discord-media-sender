@@ -12,6 +12,8 @@ import '../core/secure_store.dart';
 import '../data/database.dart';
 import '../data/models.dart';
 import 'discord_api.dart';
+import 'foreground_manager.dart';
+import 'quiet_hours_service.dart';
 import 'media_service.dart';
 
 /// A snapshot of the whole engine state, published on every change.
@@ -160,6 +162,12 @@ class UploadEngine {
   int? _etaSeconds;
   DateTime? _lastSpeedSample;
 
+  /// The moment the current job started, used for the average speed.
+  DateTime? _jobStartedAt;
+
+  /// The bandwidth cap in bytes per second, or `null` when it is disabled.
+  int? _bandwidthBytesPerSecond;
+
   /// Control flags mirrored into SQLite so that a second isolate (the
   /// foreground service) can observe pause / cancel requests issued from the
   /// UI isolate or from a widget.
@@ -211,8 +219,10 @@ class UploadEngine {
   /// Restores the pending queue from the database.
   ///
   /// Called on engine start so that work interrupted by a process death is
-  /// picked up again instead of being lost.
-  Future<void> restore() async {
+  /// picked up again instead of being lost. Returns the number of jobs that
+  /// are still pending, which the caller uses to decide whether the foreground
+  /// service has to be started.
+  Future<int> restore() async {
     final List<DistributionJob> persisted = await _db.listJobs(
       status: UploadStatus.pending.key,
     );
@@ -224,6 +234,7 @@ class UploadEngine {
     }
     _events.addAll(await _db.listLiveEvents(limit: 50));
     _publish();
+    return persisted.length;
   }
 
   /// Adds files to the queue for the given destinations.
@@ -312,7 +323,10 @@ class UploadEngine {
     _publish();
 
     if (options.autoStart) {
+      // The foreground service is started together with the queue so that a
+      // background upload is never killed by the system right after it began.
       unawaited(run());
+      unawaited(ForegroundManager.instance.start());
     }
     return skipped;
   }
@@ -437,6 +451,15 @@ class UploadEngine {
       await _skipJob(job, 'Destination is disabled');
       return;
     }
+    // A strict quiet hours window refuses even a manual upload.
+    final String? quietReason = await QuietHoursService.instance.skipReason(
+      destination.id,
+      manual: true,
+    );
+    if (quietReason != null) {
+      await _skipJob(job, 'Destination is inside its quiet hours');
+      return;
+    }
 
     _activeDestinationId = destination.id;
     _activeDestinationName = destination.name;
@@ -445,6 +468,8 @@ class UploadEngine {
     _sentBytes = 0;
     _totalBytes = job.fileSize;
     _lastSpeedSample = DateTime.now();
+    _jobStartedAt = _lastSpeedSample;
+    await _loadBandwidthCap();
 
     final DistributionJob started = job.copyWith(
       status: UploadStatus.uploading.key,
@@ -478,6 +503,20 @@ class UploadEngine {
         httpCode: result.httpCode,
         discordCode: result.discordCode,
       );
+    }
+  }
+
+  /// Reads the global bandwidth cap from the preferences.
+  ///
+  /// The cap is re-read for every job, so a change takes effect on the next
+  /// file without restarting the app.
+  Future<void> _loadBandwidthCap() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final int kilobytes = prefs.getInt(AppConstants.prefBandwidthCapKb) ?? 0;
+      _bandwidthBytesPerSecond = kilobytes > 0 ? kilobytes * 1024 : null;
+    } catch (_) {
+      _bandwidthBytesPerSecond = null;
     }
   }
 
@@ -515,6 +554,7 @@ class UploadEngine {
         files: <File>[file],
         content: job.caption,
         onProgress: (int sent, int total) => _onProgress(job, sent, total),
+        bandwidthBytesPerSecond: _bandwidthBytesPerSecond,
       );
     }
 
@@ -532,25 +572,26 @@ class UploadEngine {
       files: <File>[file],
       content: job.caption,
       onProgress: (int sent, int total) => _onProgress(job, sent, total),
+      bandwidthBytesPerSecond: _bandwidthBytesPerSecond,
     );
   }
 
   void _onProgress(DistributionJob job, int sent, int total) {
     _sentBytes = sent;
     final DateTime now = DateTime.now();
-    final DateTime? previous = _lastSpeedSample;
-    if (previous != null) {
-      final int elapsedMs = now.difference(previous).inMilliseconds;
-      if (elapsedMs > 0) {
-        _speedBytesPerSecond = sent / (elapsedMs / 1000);
-        if (_speedBytesPerSecond > 0 && total > sent) {
-          _etaSeconds = ((total - sent) / _speedBytesPerSecond).round();
-        } else if (total <= sent) {
-          _etaSeconds = 0;
-        }
+    // The speed is the average since the job started, not the average of the
+    // last chunk. An instantaneous value jumps around and makes the ETA
+    // useless on a steady transfer.
+    final DateTime jobStart = _jobStartedAt ?? now;
+    final int elapsedMs = now.difference(jobStart).inMilliseconds;
+    if (elapsedMs > 0) {
+      _speedBytesPerSecond = sent / (elapsedMs / 1000);
+      if (_speedBytesPerSecond > 0 && total > sent) {
+        _etaSeconds = ((total - sent) / _speedBytesPerSecond).round();
+      } else if (total <= sent) {
+        _etaSeconds = 0;
       }
     }
-    _lastSpeedSample = now;
 
     unawaited(
       _db.upsertUploadProgress(
@@ -784,13 +825,23 @@ class UploadEngine {
   }
 
   /// Resumes a paused engine.
+  ///
+  /// The guard of 2.0 was `if (!_paused) return`, which made a resume a no-op
+  /// after a process death: the fresh isolate never had `_paused` set. Resume
+  /// now always clears the flag and starts the queue when work is pending.
   Future<void> resume() async {
-    if (!_paused) return;
+    final bool wasPaused = _paused;
     _paused = false;
     await _db.setSetting(controlPauseKey, '0');
-    await _persistEvent('engine_resumed', 'Upload resumed');
+    await _persistEvent(
+      'engine_resumed',
+      wasPaused ? 'Upload resumed' : 'Upload continued',
+    );
     _publish();
-    unawaited(run());
+    if (!_running) {
+      unawaited(run());
+      unawaited(ForegroundManager.instance.start());
+    }
   }
 
   /// Cancels every pending job.
@@ -943,11 +994,17 @@ class UploadEngine {
           await cancel();
           break;
         case 'start':
-          // The engine is already running, so a "start" command only means
-          // "continue with the queued work".
+          // The command means "continue with the queued work". It has to start
+          // the engine, because the widget may be used while the app process
+          // was killed and the queue is only pending in the database.
           _paused = false;
           await _db.setSetting(controlPauseKey, '0');
+          await _persistEvent('engine_started', 'Upload started');
           _publish();
+          if (!_running) {
+            unawaited(run());
+            unawaited(ForegroundManager.instance.start());
+          }
           break;
         default:
           break;

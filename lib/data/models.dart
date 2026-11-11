@@ -1607,3 +1607,198 @@ class DashboardPreferences {
         updatedAt: intToTs(map['updated_at'] as int?),
       );
 }
+
+/// A named set of upload settings that can be applied with one tap.
+///
+/// A preset stores the destination ids, the caption template, the duplicate
+/// policy and an optional maximum file size. It never stores a credential, so
+/// a preset can be shared or exported without leaking a secret.
+class QueuePreset {
+  const QueuePreset({
+    required this.id,
+    required this.name,
+    this.destinationIds = const <String>[],
+    this.captionTemplate,
+    this.duplicatePolicy = DuplicatePolicy.skip,
+    this.maxSizeMb = 0,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String name;
+  final List<String> destinationIds;
+  final String? captionTemplate;
+  final DuplicatePolicy duplicatePolicy;
+  final int maxSizeMb;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  /// The caption with the placeholders already resolved.
+  ///
+  /// `{name}` becomes the file name without its extension, `{size}` the size
+  /// in megabytes and `{index}` the position of the file in the queue.
+  String renderCaption({
+    String fileName = '',
+    int sizeBytes = 0,
+    int index = 0,
+  }) {
+    final String template = captionTemplate ?? '';
+    if (template.isEmpty) return '';
+    final int megabytes = sizeBytes <= 0
+        ? 0
+        : (sizeBytes / (1024 * 1024)).round();
+    final int dot = fileName.lastIndexOf('.');
+    final String stem = dot > 0 ? fileName.substring(0, dot) : fileName;
+    return template
+        .replaceAll('{name}', stem)
+        .replaceAll('{size}', '$megabytes')
+        .replaceAll('{index}', '$index');
+  }
+
+  QueuePreset copyWith({
+    String? name,
+    List<String>? destinationIds,
+    String? captionTemplate,
+    bool clearCaptionTemplate = false,
+    DuplicatePolicy? duplicatePolicy,
+    int? maxSizeMb,
+  }) {
+    return QueuePreset(
+      id: id,
+      name: name ?? this.name,
+      destinationIds: destinationIds ?? this.destinationIds,
+      captionTemplate: clearCaptionTemplate
+          ? null
+          : (captionTemplate ?? this.captionTemplate),
+      duplicatePolicy: duplicatePolicy ?? this.duplicatePolicy,
+      maxSizeMb: maxSizeMb ?? this.maxSizeMb,
+      createdAt: createdAt,
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  Map<String, Object?> toMap() => <String, Object?>{
+    'id': id,
+    'name': name,
+    'destination_ids': jsonEncode(destinationIds),
+    'caption_template': captionTemplate,
+    'duplicate_policy': duplicatePolicy.key,
+    'max_size_mb': maxSizeMb,
+    'created_at': tsToInt(createdAt),
+    'updated_at': tsToInt(updatedAt),
+  };
+
+  factory QueuePreset.fromMap(Map<String, Object?> map) => QueuePreset(
+    id: map['id'] as String? ?? '',
+    name: map['name'] as String? ?? '',
+    destinationIds: _decodeIdList(map['destination_ids'] as String?),
+    captionTemplate: map['caption_template'] as String?,
+    duplicatePolicy: DuplicatePolicy.fromKey(
+      map['duplicate_policy'] as String?,
+    ),
+    maxSizeMb: (map['max_size_mb'] as int?) ?? 0,
+    createdAt: intToTs(map['created_at'] as int?),
+    updatedAt: intToTs(map['updated_at'] as int?),
+  );
+}
+
+/// Decodes a JSON list of ids, tolerating a malformed value.
+List<String> _decodeIdList(String? raw) {
+  if (raw == null || raw.isEmpty) return <String>[];
+  try {
+    final Object? decoded = jsonDecode(raw);
+    if (decoded is! List) return <String>[];
+    return decoded.map((Object? e) => e.toString()).toList();
+  } catch (_) {
+    return <String>[];
+  }
+}
+
+/// The quiet hours of a single destination.
+///
+/// The window is a local time range expressed in minutes after midnight. A
+/// window whose start is greater than its end wraps around midnight.
+class QuietHours {
+  const QuietHours({
+    required this.destinationId,
+    this.enabled = false,
+    this.startMinute = 0,
+    this.endMinute = 0,
+    this.strict = false,
+    required this.updatedAt,
+  });
+
+  final String destinationId;
+  final bool enabled;
+
+  /// Minutes after midnight when the window opens.
+  final int startMinute;
+
+  /// Minutes after midnight when the window closes.
+  final int endMinute;
+
+  /// When true, a manual upload is refused during the window as well.
+  ///
+  /// When false only the automatic upload skips the destination.
+  final bool strict;
+
+  final DateTime updatedAt;
+
+  /// Whether [now] falls inside the window.
+  bool contains(DateTime now) {
+    if (!enabled) return false;
+    final int minute = now.hour * 60 + now.minute;
+    if (startMinute == endMinute) return false;
+    if (startMinute < endMinute) {
+      return minute >= startMinute && minute < endMinute;
+    }
+    // The window wraps around midnight.
+    return minute >= startMinute || minute < endMinute;
+  }
+
+  /// The window as a readable range, for example `23:00 – 07:00`.
+  String get label {
+    String format(int minute) {
+      final int hour = (minute ~/ 60) % 24;
+      final int rest = minute % 60;
+      return '${hour.toString().padLeft(2, '0')}:${rest.toString().padLeft(2, '0')}';
+    }
+
+    return '${format(startMinute)} – ${format(endMinute)}';
+  }
+
+  QuietHours copyWith({
+    bool? enabled,
+    int? startMinute,
+    int? endMinute,
+    bool? strict,
+  }) {
+    return QuietHours(
+      destinationId: destinationId,
+      enabled: enabled ?? this.enabled,
+      startMinute: startMinute ?? this.startMinute,
+      endMinute: endMinute ?? this.endMinute,
+      strict: strict ?? this.strict,
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  Map<String, Object?> toMap() => <String, Object?>{
+    'destination_id': destinationId,
+    'enabled': enabled ? 1 : 0,
+    'start_minute': startMinute,
+    'end_minute': endMinute,
+    'strict': strict ? 1 : 0,
+    'updated_at': tsToInt(updatedAt),
+  };
+
+  factory QuietHours.fromMap(Map<String, Object?> map) => QuietHours(
+    destinationId: map['destination_id'] as String? ?? '',
+    enabled: ((map['enabled'] as int?) ?? 0) == 1,
+    startMinute: (map['start_minute'] as int?) ?? 0,
+    endMinute: (map['end_minute'] as int?) ?? 0,
+    strict: ((map['strict'] as int?) ?? 0) == 1,
+    updatedAt: intToTs(map['updated_at'] as int?),
+  );
+}

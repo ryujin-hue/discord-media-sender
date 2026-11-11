@@ -4,6 +4,7 @@ import '../core/constants.dart';
 import '../data/database.dart';
 import '../data/models.dart';
 import 'media_service.dart';
+import 'quiet_hours_service.dart';
 import 'upload_engine.dart';
 
 /// The result of scanning the watched folders.
@@ -85,8 +86,15 @@ class AutoUploadService {
       if (!_isWithinSchedule(rule)) continue;
 
       final List<String> targetIds = rule.destinationIds;
+      // A destination inside its quiet hours is skipped by the automatic
+      // upload. The rule still runs for the other destinations.
+      final List<String> quiet = await QuietHoursService.instance
+          .destinationsInQuietHours();
       final List<Destination> targets = destinations
-          .where((Destination d) => targetIds.contains(d.id) && d.enabled)
+          .where(
+            (Destination d) =>
+                targetIds.contains(d.id) && d.enabled && !quiet.contains(d.id),
+          )
           .toList();
       if (targets.isEmpty) continue;
 

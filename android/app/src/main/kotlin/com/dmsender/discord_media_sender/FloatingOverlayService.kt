@@ -9,7 +9,9 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -28,12 +30,39 @@ import androidx.core.app.NotificationCompat
  * The overlay shows the same state as the home screen widget and can control
  * the upload. It is only ever started after the user granted the "display over
  * other apps" permission.
+ *
+ * Two rules matter here:
+ *
+ *  * Dismissing the overlay only hides the panel. It never cancels an upload
+ *    and never stops the foreground service.
+ *  * The overlay auto-hides while the engine is idle and the queue is empty.
+ *    It reappears as soon as there is work again.
  */
 class FloatingOverlayService : android.app.Service() {
 
     private var windowManager: WindowManager? = null
     private var rootView: View? = null
     private var expanded = false
+
+    /** True while the user dismissed the overlay by hand. */
+    private var dismissedByUser = false
+
+    /** The moment the engine became idle, or `null` while it is busy. */
+    private var idleSince: Long? = null
+
+    private val handler = Handler(Looper.getMainLooper())
+
+    private val autoHideTick = object : Runnable {
+        override fun run() {
+            try {
+                refresh()
+                applyAutoHide()
+            } catch (error: Exception) {
+                // ignore
+            }
+            handler.postDelayed(this, 1000L)
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -43,6 +72,7 @@ class FloatingOverlayService : android.app.Service() {
         startForeground(NOTIFICATION_ID, buildNotification())
         if (Settings.canDrawOverlays(this)) {
             showOverlay()
+            handler.postDelayed(autoHideTick, 1000L)
         } else {
             stopSelf()
         }
@@ -57,12 +87,13 @@ class FloatingOverlayService : android.app.Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        if (rootView == null) showOverlay()
+        if (rootView == null && !dismissedByUser) showOverlay()
         refresh()
         return START_STICKY
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(autoHideTick)
         rootView?.let { view ->
             try {
                 windowManager?.removeView(view)
@@ -72,6 +103,17 @@ class FloatingOverlayService : android.app.Service() {
         }
         rootView = null
         super.onDestroy()
+    }
+
+    /** Removes the overlay panel without touching the running upload. */
+    private fun hideOverlay() {
+        val view = rootView ?: return
+        try {
+            windowManager?.removeView(view)
+        } catch (error: Exception) {
+            // ignore
+        }
+        rootView = null
     }
 
     private fun showOverlay() {
@@ -96,8 +138,10 @@ class FloatingOverlayService : android.app.Service() {
         params.x = 24
         params.y = 160
 
+        // Dismissing hides the panel. The upload keeps running.
         view.findViewById<ImageButton>(R.id.float_close)?.setOnClickListener {
-            stop(this)
+            dismissedByUser = true
+            hideOverlay()
         }
         view.findViewById<ImageButton>(R.id.float_expand)?.setOnClickListener {
             expanded = !expanded
@@ -157,6 +201,47 @@ class FloatingOverlayService : android.app.Service() {
         } catch (error: Exception) {
             rootView = null
             stopSelf()
+        }
+    }
+
+    /**
+     * Hides the overlay when the engine has been idle and empty for the
+     * configured number of seconds.
+     *
+     * A running upload is never affected: the overlay only disappears, the
+     * foreground service and the queue keep going.
+     */
+    private fun applyAutoHide() {
+        val state = UploadStateStore.snapshot(this)
+        val status = state[UploadStateStore.KEY_STATUS] as? String ?: "idle"
+        val pending = state[UploadStateStore.KEY_PENDING_FILES] as? Int ?: 0
+        val completed = state[UploadStateStore.KEY_COMPLETED_FILES] as? Int ?: 0
+        val failed = state[UploadStateStore.KEY_FAILED_FILES] as? Int ?: 0
+        val total = state[UploadStateStore.KEY_TOTAL_FILES] as? Int ?: 0
+        val isPaused = state[UploadStateStore.KEY_IS_PAUSED] as? Boolean ?: false
+        val autoHideSeconds =
+            state[UploadStateStore.KEY_OVERLAY_AUTO_HIDE] as? Int ?: 0
+
+        val busy = status == "uploading" || isPaused || pending > 0
+        if (busy) {
+            idleSince = null
+            // Work is waiting: the overlay comes back.
+            if (!dismissedByUser && rootView == null) showOverlay()
+            return
+        }
+
+        val empty = pending == 0 && completed + failed >= total
+        if (!empty) {
+            idleSince = null
+            return
+        }
+
+        if (autoHideSeconds <= 0) return
+
+        val since = idleSince ?: System.currentTimeMillis().also { idleSince = it }
+        val idleMillis = System.currentTimeMillis() - since
+        if (idleMillis >= autoHideSeconds * 1000L) {
+            hideOverlay()
         }
     }
 

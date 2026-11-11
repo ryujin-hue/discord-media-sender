@@ -14,8 +14,10 @@ import '../../providers/upload_providers.dart';
 import '../../services/duplicate_service.dart';
 import '../../services/media_resolver.dart';
 import '../../services/media_service.dart';
+import '../../services/preset_service.dart';
 import '../../services/upload_engine.dart';
 import '../../widgets/common.dart';
+import 'preset_picker.dart';
 
 /// The upload screen: pick media, choose destinations and send.
 class UploadScreen extends ConsumerStatefulWidget {
@@ -32,10 +34,31 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
   bool _compress = false;
   int _compressQuality = 80;
 
+  /// The maximum file size a preset put on the form.
+  ///
+  /// `null` means that the app default from the settings is used. The value
+  /// is fed into the queue options so that a preset really limits the size of
+  /// the files that are sent.
+  int? _presetMaxMb;
+
+  @override
+  void initState() {
+    super.initState();
+    // The caption of the form is kept in the provider as well, so that the
+    // preset section always reads the caption that is currently shown.
+    _captionController.addListener(_onCaptionChanged);
+  }
+
   @override
   void dispose() {
-    _captionController.dispose();
+    _captionController
+      ..removeListener(_onCaptionChanged)
+      ..dispose();
     super.dispose();
+  }
+
+  void _onCaptionChanged() {
+    ref.read(captionProvider.notifier).set(_captionController.text);
   }
 
   // ---------------------------------------------------------------------------
@@ -150,12 +173,74 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
   }
 
   // ---------------------------------------------------------------------------
+  // Presets
+  // ---------------------------------------------------------------------------
+
+  /// Fills the form with the values of a preset.
+  ///
+  /// The caption of a preset is a template. The form shows the template
+  /// itself so that the user can keep editing it; the placeholders are only
+  /// replaced when the batch is queued.
+  void _applyPreset(QueuePreset preset, PresetApplication application) {
+    ref
+        .read(selectedDestinationsProvider.notifier)
+        .selectAll(application.destinations.map((Destination d) => d.id));
+    ref.read(duplicatePolicyProvider.notifier).set(preset.duplicatePolicy);
+
+    final String template = preset.captionTemplate ?? '';
+    // Writing the template into the field keeps it editable; the provider is
+    // updated by the listener of the field.
+    _captionController.text = template;
+
+    setState(() {
+      _presetMaxMb = preset.maxSizeMb > 0 ? preset.maxSizeMb : null;
+    });
+    showAppSnack(context, 'Preset applied: ${preset.name}');
+  }
+
+  /// The maximum file size that is applied to the next batch.
+  ///
+  /// A preset that carries a size limit wins over the app default.
+  int get _effectiveMaxMb =>
+      _presetMaxMb ?? ref.read(settingsProvider).maxFileMb;
+
+  /// Resolves the caption of a batch.
+  ///
+  /// The caption travels with the whole batch, so the values of the first
+  /// file are used. [QueuePreset.renderCaption] owns the placeholder rules
+  /// (`{name}`, `{size}`, `{index}`), the template is resolved through it.
+  String? _resolveCaption(String template, List<MediaCandidate> files) {
+    if (template.isEmpty) return null;
+    if (files.isEmpty) return template;
+    final QueuePreset renderer = QueuePreset(
+      id: 'caption-renderer',
+      name: 'caption-renderer',
+      captionTemplate: template,
+      createdAt: DateTime.fromMillisecondsSinceEpoch(0),
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+    );
+    final String rendered = renderer.renderCaption(
+      fileName: files.first.name,
+      sizeBytes: files.first.size,
+      index: 1,
+    );
+    return rendered.isEmpty ? null : rendered;
+  }
+
+  // ---------------------------------------------------------------------------
   // Sending
   // ---------------------------------------------------------------------------
 
   Future<void> _send() async {
-    final List<Destination> destinations =
+    final List<Destination> all =
         ref.watch(destinationsProvider).value ?? const <Destination>[];
+    final Set<String> selected = ref.read(selectedDestinationsProvider);
+    // The destinations that are picked in the form win, so that a preset that
+    // fills the form really limits where the files go. Without a selection
+    // every destination is used, as before.
+    final List<Destination> destinations = selected.isEmpty
+        ? all
+        : all.where((Destination d) => selected.contains(d.id)).toList();
     if (_files.isEmpty) {
       showAppSnack(context, 'Select at least one file first.', isError: true);
       return;
@@ -199,9 +284,10 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
       ref.invalidate(duplicatesProvider);
 
       final DistributionMode mode = ref.read(distributionModeProvider);
-      final String? caption = _captionController.text.trim().isEmpty
-          ? null
-          : _captionController.text.trim();
+      final String? caption = _resolveCaption(
+        _captionController.text.trim(),
+        prepared,
+      );
 
       final List<String> skipped = await UploadEngine.instance.enqueue(
         prepared,
@@ -210,7 +296,7 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
           distributionMode: mode,
           caption: caption,
           duplicatePolicy: ref.read(duplicatePolicyProvider),
-          maxFileMb: ref.read(settingsProvider).maxFileMb,
+          maxFileMb: _effectiveMaxMb,
         ),
       );
 
@@ -219,13 +305,20 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
         _files.clear();
         _captionController.clear();
       });
+      // The snack reports counts only: the files that entered the queue, the
+      // files that did not (unreadable, too large or held back by the
+      // duplicate policy) and the duplicates that were found in the batch.
+      // A file that is held back for one destination is counted once.
+      final Set<String> skippedFiles = skipped.toSet();
+      final int queued = prepared
+          .where((MediaCandidate f) => !skippedFiles.contains(f.name))
+          .length;
+      final int duplicates = scan.duplicates.length;
       showAppSnack(
         context,
-        skipped.isEmpty
-            ? 'Queued ${prepared.length} file(s).'
-            : 'Queued ${prepared.length - skipped.length} file(s), skipped ${skipped.length}.',
-        isSuccess: skipped.isEmpty,
-        isError: skipped.isNotEmpty,
+        'Queued $queued · Skipped ${skippedFiles.length} · Duplicates $duplicates',
+        isSuccess: skippedFiles.isEmpty,
+        isError: skippedFiles.isNotEmpty,
       );
     } catch (error) {
       if (mounted) {
@@ -249,7 +342,8 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
     final EngineSnapshot? snapshot = ref.watch(engineSnapshotProvider).value;
     final List<Destination> destinations =
         ref.watch(destinationsProvider).value ?? const <Destination>[];
-    final int maxMb = ref.watch(settingsProvider).maxFileMb;
+    // The limit of an applied preset wins over the app default.
+    final int maxMb = _presetMaxMb ?? ref.watch(settingsProvider).maxFileMb;
 
     return Scaffold(
       body: SafeArea(
@@ -280,15 +374,25 @@ class _UploadScreenState extends ConsumerState<UploadScreen> {
             const SizedBox(height: 14),
             _DestinationSelector(destinations: destinations),
             const SizedBox(height: 14),
+            PresetSection(
+              maxMb: maxMb,
+              destinations: destinations,
+              onApply: _applyPreset,
+            ),
+            const SizedBox(height: 14),
             _OptionsCard(
               captionController: _captionController,
               maxMb: maxMb,
+              presetLimit: _presetMaxMb,
               compress: _compress,
               compressQuality: _compressQuality,
               onCompressChanged: (bool value) =>
                   setState(() => _compress = value),
               onQualityChanged: (int value) =>
                   setState(() => _compressQuality = value),
+              onResetMaxSize: _presetMaxMb == null
+                  ? null
+                  : () => setState(() => _presetMaxMb = null),
             ),
             const SizedBox(height: 14),
             if (snapshot != null && snapshot.jobs.isNotEmpty) ...<Widget>[
@@ -573,18 +677,27 @@ class _OptionsCard extends StatelessWidget {
   const _OptionsCard({
     required this.captionController,
     required this.maxMb,
+    required this.presetLimit,
     required this.compress,
     required this.compressQuality,
     required this.onCompressChanged,
     required this.onQualityChanged,
+    this.onResetMaxSize,
   });
 
   final TextEditingController captionController;
   final int maxMb;
+
+  /// The limit that a preset put on the form, `null` when the app default
+  /// from the settings is used.
+  final int? presetLimit;
   final bool compress;
   final int compressQuality;
   final ValueChanged<bool> onCompressChanged;
   final ValueChanged<int> onQualityChanged;
+
+  /// Called when the preset limit is dropped in favour of the app default.
+  final VoidCallback? onResetMaxSize;
 
   @override
   Widget build(BuildContext context) {
@@ -602,6 +715,9 @@ class _OptionsCard extends StatelessWidget {
             decoration: const InputDecoration(
               labelText: 'Caption',
               hintText: 'Sent with the first file of every batch',
+              helperText:
+                  '{name}, {size} and {index} are resolved when the batch is '
+                  'queued',
             ),
           ),
           const SizedBox(height: 14),
@@ -622,10 +738,21 @@ class _OptionsCard extends StatelessWidget {
                   ],
                 ),
               ),
-              const StatusPill(
-                label: 'Discord max 100 MB',
-                color: AppConstants.colorTextSecondary,
-              ),
+              if (presetLimit != null) ...<Widget>[
+                const StatusPill(
+                  label: 'Preset limit',
+                  color: AppConstants.colorPrimary,
+                ),
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: onResetMaxSize,
+                  child: const Text('Reset'),
+                ),
+              ] else
+                const StatusPill(
+                  label: 'Discord max 100 MB',
+                  color: AppConstants.colorTextSecondary,
+                ),
             ],
           ),
           const SizedBox(height: 10),

@@ -97,8 +97,8 @@ archiveFilterProvider = NotifierProvider<ArchiveFilterNotifier, ArchiveFilter>(
 /// The archive manager — overview, archived media, rules and history.
 ///
 /// Archiving is a logical operation by default: the library entry is flagged
-/// as archived and the original file stays untouched on disk unless the user
-/// explicitly asks for it to be removed.
+/// as archived and the original file stays untouched on disk. Moving the file
+/// into the app archive folder is an opt-in that the user has to enable.
 class ArchiveScreen extends ConsumerWidget {
   const ArchiveScreen({super.key});
 
@@ -135,8 +135,6 @@ class ArchiveScreen extends ConsumerWidget {
               _ArchiveSummaryCard(summary: summary),
               const SizedBox(height: 14),
               const _ArchiveActionsCard(),
-              const SizedBox(height: 14),
-              const _ArchiveNoteCard(),
               const SizedBox(height: 14),
               _ArchiveRecordsCard(records: filtered, total: records.length),
               const SizedBox(height: 14),
@@ -251,8 +249,8 @@ class _ArchiveSummaryCard extends StatelessWidget {
           const SizedBox(height: 6),
           const Divider(),
           const SizedBox(height: 6),
-          Text('By category', style: theme.textTheme.titleSmall),
-          const SizedBox(height: 4),
+          Text('By category', style: theme.textTheme.bodySmall),
+          const SizedBox(height: 2),
           for (final ArchiveCategory category in ArchiveCategory.values)
             MetricRow(
               label: category.label,
@@ -264,15 +262,16 @@ class _ArchiveSummaryCard extends StatelessWidget {
   }
 }
 
-/// The archive actions: archive selected, archive all and search.
+/// The archive actions: archive selected and archive all completed.
 class _ArchiveActionsCard extends ConsumerWidget {
   const _ArchiveActionsCard();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final ThemeData theme = Theme.of(context);
     return SectionCard(
       title: 'Actions',
-      subtitle: 'Archive uploaded media or find an archived file',
+      subtitle: 'Archive uploaded media',
       icon: Icons.archive_rounded,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -294,7 +293,12 @@ class _ArchiveActionsCard extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 12),
-          const _ArchiveSearchField(),
+          Text(
+            'Archiving is logical: the library entry is flagged as archived and '
+            'the file stays where it is. Moving the file into the app archive '
+            'folder is opt-in and only applies to the files you pick.',
+            style: theme.textTheme.bodySmall,
+          ),
         ],
       ),
     );
@@ -320,24 +324,36 @@ class _ArchiveActionsCard extends ConsumerWidget {
       return;
     }
 
-    final List<MediaLibraryEntry>? selected =
-        await showDialog<List<MediaLibraryEntry>>(
-          context: context,
-          builder: (BuildContext context) =>
-              _ArchivePickerDialog(entries: candidates),
-        );
-    if (selected == null || selected.isEmpty) return;
+    final _ArchiveSelection? selection = await showDialog<_ArchiveSelection>(
+      context: context,
+      builder: (BuildContext context) =>
+          _ArchivePickerDialog(entries: candidates),
+    );
+    if (selection == null || selection.entries.isEmpty) return;
 
     int archived = 0;
-    for (final MediaLibraryEntry entry in selected) {
-      await ArchiveService.instance.archiveMedia(entry);
+    int moved = 0;
+    for (final MediaLibraryEntry entry in selection.entries) {
+      await ArchiveService.instance.archiveMedia(
+        entry,
+        moveFile: selection.moveFiles,
+      );
       archived++;
+      if (selection.moveFiles) {
+        final MediaLibraryEntry? updated = await AppDatabase.instance.mediaById(
+          entry.id,
+        );
+        if (updated != null && updated.path != entry.path) moved++;
+      }
     }
     ArchiveScreen._refresh(ref);
     if (!context.mounted) return;
     showAppSnack(
       context,
-      'Archived ${Formatters.count(archived)} file${archived == 1 ? '' : 's'}',
+      selection.moveFiles
+          ? 'Archived ${Formatters.count(archived)} files · '
+                '${Formatters.count(moved)} moved'
+          : 'Archived ${Formatters.count(archived)} files',
       isSuccess: true,
     );
   }
@@ -382,51 +398,18 @@ class _ArchiveSearchFieldState extends ConsumerState<_ArchiveSearchField> {
           ref.read(archiveFilterProvider.notifier).setSearch(value),
       decoration: InputDecoration(
         hintText: 'Search archived media',
-        prefixIcon: const Icon(Icons.search_rounded),
+        prefixIcon: const Icon(Icons.search_rounded, size: 20),
         suffixIcon: _controller.text.isEmpty
             ? null
             : IconButton(
                 tooltip: 'Clear search',
-                icon: const Icon(Icons.close_rounded),
+                icon: const Icon(Icons.close_rounded, size: 18),
                 onPressed: () {
                   _controller.clear();
                   ref.read(archiveFilterProvider.notifier).setSearch('');
                   setState(() {});
                 },
               ),
-      ),
-    );
-  }
-}
-
-/// The note explaining what archiving does to the original file.
-class _ArchiveNoteCard extends StatelessWidget {
-  const _ArchiveNoteCard();
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    return SectionCard(
-      title: 'Before you archive',
-      icon: Icons.info_outline_rounded,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Icon(
-            Icons.shield_outlined,
-            size: 18,
-            color: theme.colorScheme.primary,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Archiving marks entries as archived; the original file is only '
-              'moved when you explicitly allow it. Archived media is stored '
-              'locally, not in the cloud.',
-              style: theme.textTheme.bodySmall,
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -453,6 +436,8 @@ class _ArchiveRecordsCard extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
+          const _ArchiveSearchField(),
+          const SizedBox(height: 12),
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -468,10 +453,10 @@ class _ArchiveRecordsCard extends ConsumerWidget {
                 ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           Row(
             children: <Widget>[
-              Text('Sort by', style: theme.textTheme.bodySmall),
+              Text('Sort', style: theme.textTheme.bodySmall),
               const SizedBox(width: 8),
               PopupMenuButton<ArchiveSortOrder>(
                 tooltip: 'Sort archived media',
@@ -487,16 +472,13 @@ class _ArchiveRecordsCard extends ConsumerWidget {
                           child: Text(order.label),
                         ),
                     ],
-                child: Chip(
-                  avatar: const Icon(Icons.sort_rounded, size: 16),
-                  label: Text(filter.sort.label),
-                ),
+                child: Chip(label: Text(filter.sort.label)),
               ),
             ],
           ),
           const SizedBox(height: 6),
           if (records.isEmpty)
-            SizedBox(
+            const SizedBox(
               height: 180,
               child: EmptyState(
                 icon: Icons.inventory_2_outlined,
@@ -527,75 +509,86 @@ class _ArchiveRecordTile extends ConsumerWidget {
     final String? openPath = record.originalPath ?? record.archivePath;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Row(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.primary.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(
-              iconForCategory(record.category),
-              size: 18,
-              color: theme.colorScheme.primary,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  Formatters.fileName(record.fileName),
-                  style: theme.textTheme.bodyLarge,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  '${Formatters.bytes(record.fileSize)} · '
-                  'Archived ${_formatDate(record.archivedAt)}',
-                  style: theme.textTheme.bodySmall,
+                child: Icon(
+                  iconForCategory(record.category),
+                  size: 16,
+                  color: theme.colorScheme.primary,
                 ),
-                if (record.isRestored) ...<Widget>[
-                  const SizedBox(height: 8),
-                  const StatusPill(
-                    label: 'Restored',
-                    color: AppConstants.colorSuccess,
-                    icon: Icons.undo_rounded,
-                  ),
-                ],
-                const SizedBox(height: 4),
-                Wrap(
-                  spacing: 4,
-                  runSpacing: 4,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    TextButton.icon(
-                      onPressed: record.isRestored
-                          ? null
-                          : () => _restore(context, ref, record),
-                      icon: const Icon(Icons.restore_rounded, size: 16),
-                      label: const Text('Restore'),
+                    Text(
+                      Formatters.fileName(record.fileName),
+                      style: theme.textTheme.bodyMedium,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    TextButton.icon(
-                      onPressed: () => _delete(context, ref, record),
-                      icon: const Icon(Icons.delete_forever_rounded, size: 16),
-                      label: const Text('Delete permanently'),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${Formatters.bytes(record.fileSize)} · '
+                      'Archived ${_formatDate(record.archivedAt)}',
+                      style: theme.textTheme.bodySmall,
                     ),
-                    TextButton.icon(
-                      onPressed: openPath == null
-                          ? null
-                          : () => _openOriginal(context, openPath),
-                      icon: const Icon(Icons.open_in_new_rounded, size: 16),
-                      label: const Text('Open original'),
+                    const SizedBox(height: 2),
+                    Text(
+                      record.archivePath != null &&
+                              record.archivePath!.isNotEmpty
+                          ? 'File moved into the archive folder'
+                          : 'File kept at its original location',
+                      style: theme.textTheme.bodySmall,
                     ),
                   ],
                 ),
-              ],
-            ),
+              ),
+              if (record.isRestored)
+                const StatusPill(
+                  label: 'Restored',
+                  color: AppConstants.colorSuccess,
+                  icon: Icons.undo_rounded,
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            children: <Widget>[
+              TextButton(
+                onPressed: record.isRestored
+                    ? null
+                    : () => _restore(context, ref, record),
+                child: const Text('Restore'),
+              ),
+              TextButton(
+                onPressed: () => _delete(context, ref, record),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppConstants.colorError,
+                ),
+                child: const Text('Delete permanently'),
+              ),
+              TextButton(
+                onPressed: openPath == null
+                    ? null
+                    : () => _openOriginal(context, openPath),
+                child: const Text('Open original'),
+              ),
+            ],
           ),
         ],
       ),
@@ -614,27 +607,19 @@ class _ArchiveRecordTile extends ConsumerWidget {
     showAppSnack(context, '${record.fileName} was restored', isSuccess: true);
   }
 
-  /// Deletes the archive record, optionally deleting the file as well.
+  /// Deletes the archive record after an explicit confirmation.
+  ///
+  /// The dialog states what is deleted. The file on the device is only
+  /// deleted when the user ticks the extra option.
   Future<void> _delete(
     BuildContext context,
     WidgetRef ref,
     ArchiveRecord record,
   ) async {
-    final bool confirmed = await showConfirmDialog(
-      context,
-      title: 'Delete the archive record?',
-      message:
-          'The archive record of "${record.fileName}" will be removed. '
-          'The file on disk is NOT deleted unless you tick the extra option '
-          'in the next step.',
-      confirmLabel: 'Continue',
-      destructive: true,
-    );
-    if (!confirmed || !context.mounted) return;
-
     final bool? deleteFile = await showDialog<bool>(
       context: context,
-      builder: (BuildContext context) => const _DeleteFileDialog(),
+      builder: (BuildContext context) =>
+          _PermanentDeleteDialog(fileName: record.fileName),
     );
     if (deleteFile == null || !context.mounted) return;
 
@@ -715,7 +700,7 @@ class _ArchiveRulesCard extends ConsumerWidget {
     ];
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -723,7 +708,7 @@ class _ArchiveRulesCard extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text(rule.name, style: theme.textTheme.titleSmall),
+                Text(rule.name, style: theme.textTheme.bodyMedium),
                 const SizedBox(height: 2),
                 Text(
                   conditions.isEmpty
@@ -733,10 +718,9 @@ class _ArchiveRulesCard extends ConsumerWidget {
                 ),
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: TextButton.icon(
+                  child: TextButton(
                     onPressed: () => _openRuleDialog(context, ref, rule: rule),
-                    icon: const Icon(Icons.edit_rounded, size: 16),
-                    label: const Text('Edit'),
+                    child: const Text('Edit'),
                   ),
                 ),
               ],
@@ -796,33 +780,20 @@ class _ArchiveOperationsCard extends StatelessWidget {
               children: <Widget>[
                 for (final ArchiveOperation operation in operations)
                   Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 5),
-                    child: Row(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
-                        Icon(
-                          _operationIcon(operation.operation),
-                          size: 16,
-                          color: theme.colorScheme.primary,
+                        Text(
+                          _operationLabel(operation.operation),
+                          style: theme.textTheme.bodyMedium,
                         ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              Text(
-                                _operationLabel(operation.operation),
-                                style: theme.textTheme.bodyMedium,
-                              ),
-                              Text(
-                                '${Formatters.count(operation.itemCount)} item'
-                                '${operation.itemCount == 1 ? '' : 's'} · '
-                                '${_formatDate(operation.createdAt)}'
-                                '${operation.detail == null || operation.detail!.isEmpty ? '' : ' · ${operation.detail!}'}',
-                                style: theme.textTheme.bodySmall,
-                              ),
-                            ],
-                          ),
+                        Text(
+                          '${Formatters.count(operation.itemCount)} item'
+                          '${operation.itemCount == 1 ? '' : 's'} · '
+                          '${_formatDate(operation.createdAt)}'
+                          '${operation.detail == null || operation.detail!.isEmpty ? '' : ' · ${operation.detail!}'}',
+                          style: theme.textTheme.bodySmall,
                         ),
                       ],
                     ),
@@ -831,6 +802,16 @@ class _ArchiveOperationsCard extends StatelessWidget {
             ),
     );
   }
+}
+
+/// The files that the user picked in the archive picker.
+class _ArchiveSelection {
+  const _ArchiveSelection({required this.entries, required this.moveFiles});
+
+  final List<MediaLibraryEntry> entries;
+
+  /// Whether the files are moved into the app archive folder.
+  final bool moveFiles;
 }
 
 /// The picker used to select the media that must be archived.
@@ -845,6 +826,7 @@ class _ArchivePickerDialog extends StatefulWidget {
 
 class _ArchivePickerDialogState extends State<_ArchivePickerDialog> {
   final Set<String> _selected = <String>{};
+  bool _moveFiles = false;
 
   @override
   Widget build(BuildContext context) {
@@ -854,35 +836,52 @@ class _ArchivePickerDialogState extends State<_ArchivePickerDialog> {
       content: SizedBox(
         width: double.maxFinite,
         height: 420,
-        child: ListView.builder(
-          itemCount: widget.entries.length,
-          itemBuilder: (BuildContext context, int index) {
-            final MediaLibraryEntry entry = widget.entries[index];
-            return CheckboxListTile(
-              value: _selected.contains(entry.id),
+        child: Column(
+          children: <Widget>[
+            Expanded(
+              child: ListView.builder(
+                itemCount: widget.entries.length,
+                itemBuilder: (BuildContext context, int index) {
+                  final MediaLibraryEntry entry = widget.entries[index];
+                  return CheckboxListTile(
+                    value: _selected.contains(entry.id),
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    secondary: Icon(iconForCategory(entry.category)),
+                    title: Text(
+                      Formatters.fileName(entry.name),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(
+                      '${Formatters.bytes(entry.size)} · ${entry.category}',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    onChanged: (bool? value) {
+                      setState(() {
+                        if (value == true) {
+                          _selected.add(entry.id);
+                        } else {
+                          _selected.remove(entry.id);
+                        }
+                      });
+                    },
+                  );
+                },
+              ),
+            ),
+            const Divider(),
+            SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
-              secondary: Icon(iconForCategory(entry.category)),
-              title: Text(
-                Formatters.fileName(entry.name),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              value: _moveFiles,
+              title: const Text('Move the file to the archive folder'),
+              subtitle: const Text(
+                'Off by default: archiving only flags the library entry',
+                style: TextStyle(fontSize: 12),
               ),
-              subtitle: Text(
-                '${Formatters.bytes(entry.size)} · ${entry.category}',
-                style: theme.textTheme.bodySmall,
-              ),
-              onChanged: (bool? value) {
-                setState(() {
-                  if (value == true) {
-                    _selected.add(entry.id);
-                  } else {
-                    _selected.remove(entry.id);
-                  }
-                });
-              },
-            );
-          },
+              onChanged: (bool value) => setState(() => _moveFiles = value),
+            ),
+          ],
         ),
       ),
       actions: <Widget>[
@@ -894,12 +893,15 @@ class _ArchivePickerDialogState extends State<_ArchivePickerDialog> {
           onPressed: _selected.isEmpty
               ? null
               : () => Navigator.of(context).pop(
-                  widget.entries
-                      .where(
-                        (MediaLibraryEntry entry) =>
-                            _selected.contains(entry.id),
-                      )
-                      .toList(),
+                  _ArchiveSelection(
+                    entries: widget.entries
+                        .where(
+                          (MediaLibraryEntry entry) =>
+                              _selected.contains(entry.id),
+                        )
+                        .toList(),
+                    moveFiles: _moveFiles,
+                  ),
                 ),
           child: Text('Archive ${_selected.length}'),
         ),
@@ -1005,7 +1007,7 @@ class _ArchiveRuleDialogState extends State<_ArchiveRuleDialog> {
                 ),
               ),
               const SizedBox(height: 14),
-              Text('Categories', style: theme.textTheme.titleSmall),
+              Text('Categories', style: theme.textTheme.bodySmall),
               const SizedBox(height: 6),
               Wrap(
                 spacing: 8,
@@ -1110,29 +1112,32 @@ class _ArchiveRuleDialogState extends State<_ArchiveRuleDialog> {
   }
 }
 
-/// The optional second step of the permanent deletion: deleting the file.
-class _DeleteFileDialog extends StatefulWidget {
-  const _DeleteFileDialog();
+/// The explicit confirmation of a permanent deletion.
+class _PermanentDeleteDialog extends StatefulWidget {
+  const _PermanentDeleteDialog({required this.fileName});
+
+  final String fileName;
 
   @override
-  State<_DeleteFileDialog> createState() => _DeleteFileDialogState();
+  State<_PermanentDeleteDialog> createState() => _PermanentDeleteDialogState();
 }
 
-class _DeleteFileDialogState extends State<_DeleteFileDialog> {
+class _PermanentDeleteDialogState extends State<_PermanentDeleteDialog> {
   bool _deleteFile = false;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     return AlertDialog(
-      title: const Text('Delete the file from storage?'),
+      title: const Text('Delete permanently?'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Text(
-            'The archive record is removed in every case. Tick the option below '
-            'to also delete the file from storage — this cannot be undone.',
+            'The archive record of "${widget.fileName}" is deleted. The file on '
+            'the device is kept unless you tick the box below. A deleted file '
+            'cannot be restored.',
             style: theme.textTheme.bodySmall,
           ),
           const SizedBox(height: 8),
@@ -1140,7 +1145,7 @@ class _DeleteFileDialogState extends State<_DeleteFileDialog> {
             value: _deleteFile,
             contentPadding: EdgeInsets.zero,
             controlAffinity: ListTileControlAffinity.leading,
-            title: const Text('Also delete the file from storage'),
+            title: const Text('Also delete the file from the device'),
             onChanged: (bool? value) =>
                 setState(() => _deleteFile = value ?? false),
           ),
@@ -1219,21 +1224,5 @@ String _operationLabel(String operation) {
       return 'Deleted permanently';
     default:
       return operation;
-  }
-}
-
-/// Maps an archive operation to an icon.
-IconData _operationIcon(String operation) {
-  switch (operation) {
-    case 'archive':
-      return Icons.inventory_2_rounded;
-    case 'archive_all_completed':
-      return Icons.inventory_2_outlined;
-    case 'restore':
-      return Icons.restore_rounded;
-    case 'permanent_delete':
-      return Icons.delete_forever_rounded;
-    default:
-      return Icons.history_rounded;
   }
 }

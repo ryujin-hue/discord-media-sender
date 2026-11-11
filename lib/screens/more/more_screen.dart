@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants.dart';
 import '../../providers/config_providers.dart';
 import '../../root_shell.dart';
+import '../../widgets/brand.dart';
 import '../../widgets/common.dart';
 import '../analytics/analytics_screen.dart';
 import '../archive/archive_screen.dart';
@@ -142,6 +143,13 @@ class MoreScreen extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 12),
+                    child: BrandLockup(
+                      size: 44,
+                      subtitle: 'Smart media delivery for Discord',
+                    ),
+                  ),
                   MetricRow(label: 'Version', value: AppConstants.appVersion),
                   MetricRow(
                     label: 'Application id',
@@ -150,6 +158,12 @@ class MoreScreen extends ConsumerWidget {
                   MetricRow(
                     label: 'Repository',
                     value: AppConstants.githubRepoUrl,
+                    onTap: () => openUrl(context, AppConstants.githubRepoUrl),
+                    valueTrailing: Icon(
+                      Icons.open_in_new_rounded,
+                      size: 14,
+                      color: theme.colorScheme.primary,
+                    ),
                   ),
                 ],
               ),

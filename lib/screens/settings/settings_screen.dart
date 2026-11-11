@@ -25,6 +25,10 @@ class SettingsScreen extends ConsumerWidget {
             const SizedBox(height: 14),
             _UploadSection(settings: settings),
             const SizedBox(height: 14),
+            _RecoverySection(settings: settings),
+            const SizedBox(height: 14),
+            _WidgetSection(settings: settings),
+            const SizedBox(height: 14),
             const _DataSection(),
             const SizedBox(height: 14),
             const _AboutSection(),
@@ -147,6 +151,168 @@ class _UploadSection extends ConsumerWidget {
           Text(
             'Beta builds are published as GitHub pre-releases and may be '
             'less stable than the stable channel.',
+            style: theme.textTheme.bodySmall,
+          ),
+          const Divider(height: 26),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text('Bandwidth cap', style: theme.textTheme.bodyMedium),
+              ),
+              Text(
+                settings.bandwidthCapKb <= 0
+                    ? 'Unlimited'
+                    : '${settings.bandwidthCapKb} KB/s',
+                style: theme.textTheme.titleSmall,
+              ),
+            ],
+          ),
+          Slider(
+            value: settings.bandwidthCapKb.clamp(0, 2048).toDouble(),
+            min: 0,
+            max: 2048,
+            divisions: 64,
+            label: settings.bandwidthCapKb <= 0
+                ? 'Unlimited'
+                : '${settings.bandwidthCapKb} KB/s',
+            onChanged: (double value) {
+              // The slider works in steps of 32 KB/s so that the value stays
+              // readable; zero means unlimited.
+              final int kilobytes = (value / 32).round() * 32;
+              ref.read(settingsProvider.notifier).setBandwidthCapKb(kilobytes);
+            },
+          ),
+          Text(
+            'Limits the transfer rate of every upload. Discord rate limits '
+            'still apply on top of this.',
+            style: theme.textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The behaviour of a cold start that finds pending work.
+class _RecoverySection extends ConsumerWidget {
+  const _RecoverySection({required this.settings});
+
+  final AppSettings settings;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ThemeData theme = Theme.of(context);
+
+    return SectionCard(
+      title: 'Recovery',
+      subtitle: 'What happens to a queue that was interrupted',
+      icon: Icons.restore_rounded,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text('Safe resume', style: theme.textTheme.bodyMedium),
+          const SizedBox(height: 6),
+          Text(
+            'Applies when the app is opened while uploads are still pending.',
+            style: theme.textTheme.bodySmall,
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              for (final SafeResumePolicy policy in SafeResumePolicy.values)
+                ChoiceChip(
+                  label: Text(policy.label),
+                  selected: settings.safeResume == policy,
+                  onSelected: (bool selected) {
+                    if (!selected) return;
+                    ref.read(settingsProvider.notifier).setSafeResume(policy);
+                  },
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The appearance of the home screen widget and the floating overlay.
+class _WidgetSection extends ConsumerWidget {
+  const _WidgetSection({required this.settings});
+
+  final AppSettings settings;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ThemeData theme = Theme.of(context);
+
+    return SectionCard(
+      title: 'Widgets',
+      subtitle: 'Home screen widget and floating overlay',
+      icon: Icons.widgets_rounded,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text('Widget density', style: theme.textTheme.bodyMedium),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              for (final WidgetDensity density in WidgetDensity.values)
+                ChoiceChip(
+                  label: Text(density.label),
+                  selected: settings.widgetDensity == density,
+                  onSelected: (bool selected) {
+                    if (!selected) return;
+                    ref
+                        .read(settingsProvider.notifier)
+                        .setWidgetDensity(density);
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Normal shows three lines, compact shows two.',
+            style: theme.textTheme.bodySmall,
+          ),
+          const Divider(height: 26),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  'Overlay auto-hide',
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ),
+              Text(
+                settings.overlayAutoHideSeconds <= 0
+                    ? 'Always visible'
+                    : '${settings.overlayAutoHideSeconds}s',
+                style: theme.textTheme.titleSmall,
+              ),
+            ],
+          ),
+          Slider(
+            value: settings.overlayAutoHideSeconds.clamp(0, 300).toDouble(),
+            min: 0,
+            max: 300,
+            divisions: 60,
+            label: settings.overlayAutoHideSeconds <= 0
+                ? 'Always visible'
+                : '${settings.overlayAutoHideSeconds}s',
+            onChanged: (double value) {
+              ref
+                  .read(settingsProvider.notifier)
+                  .setOverlayAutoHideSeconds(value.round());
+            },
+          ),
+          Text(
+            'Hides the overlay while the engine is idle. A running upload is '
+            'never cancelled by the overlay.',
             style: theme.textTheme.bodySmall,
           ),
         ],

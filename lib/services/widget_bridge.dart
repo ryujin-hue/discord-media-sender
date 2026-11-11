@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/constants.dart';
 import 'upload_engine.dart';
 
 /// The snapshot of the upload engine that is mirrored to the native widgets.
@@ -20,6 +22,8 @@ class WidgetState {
     this.currentFileName,
     this.activeDestinationName,
     this.isPaused = false,
+    this.density = 'normal',
+    this.overlayAutoHideSeconds = 0,
     this.updatedAt = 0,
   });
 
@@ -36,6 +40,13 @@ class WidgetState {
   final String? currentFileName;
   final String? activeDestinationName;
   final bool isPaused;
+
+  /// The density of the widget: `normal` or `compact`.
+  final String density;
+
+  /// Seconds the overlay stays hidden while the engine is idle.
+  final int overlayAutoHideSeconds;
+
   final int updatedAt;
 
   Map<String, Object?> toMap() => <String, Object?>{
@@ -55,7 +66,11 @@ class WidgetState {
     'updatedAt': updatedAt,
   };
 
-  factory WidgetState.fromEngine(EngineSnapshot snapshot) {
+  factory WidgetState.fromEngine(
+    EngineSnapshot snapshot, {
+    String density = 'normal',
+    int overlayAutoHideSeconds = 0,
+  }) {
     final String status = snapshot.isPaused
         ? 'paused'
         : snapshot.isRunning
@@ -75,6 +90,8 @@ class WidgetState {
       currentFileName: snapshot.currentFileName,
       activeDestinationName: snapshot.activeDestinationName,
       isPaused: snapshot.isPaused,
+      density: density,
+      overlayAutoHideSeconds: overlayAutoHideSeconds,
       updatedAt: DateTime.now().millisecondsSinceEpoch,
     );
   }
@@ -93,6 +110,9 @@ class WidgetState {
     currentFileName: map['currentFileName'] as String?,
     activeDestinationName: map['activeDestinationName'] as String?,
     isPaused: map['isPaused'] as bool? ?? false,
+    density: map['density'] as String? ?? 'normal',
+    overlayAutoHideSeconds:
+        (map['overlayAutoHideSeconds'] as num?)?.toInt() ?? 0,
     updatedAt: (map['updatedAt'] as num?)?.toInt() ?? 0,
   );
 }
@@ -125,8 +145,35 @@ class WidgetBridge {
     if (_initialised) return;
     _initialised = true;
     _engineSubscription = engine.snapshots.listen((EngineSnapshot snapshot) {
-      unawaited(publish(WidgetState.fromEngine(snapshot)));
+      unawaited(_publishSnapshot(snapshot));
     });
+  }
+
+  /// Reads the widget preferences that the native side needs.
+  Future<Map<String, Object?>> _preferences() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      return <String, Object?>{
+        'density': prefs.getString(AppConstants.prefWidgetDensity) ?? 'normal',
+        'overlayAutoHideSeconds':
+            prefs.getInt(AppConstants.prefOverlayAutoHide) ?? 0,
+      };
+    } catch (_) {
+      return <String, Object?>{};
+    }
+  }
+
+  /// Publishes a snapshot together with the widget preferences.
+  Future<void> _publishSnapshot(EngineSnapshot snapshot) async {
+    final Map<String, Object?> preferences = await _preferences();
+    await publish(
+      WidgetState.fromEngine(
+        snapshot,
+        density: preferences['density'] as String? ?? 'normal',
+        overlayAutoHideSeconds:
+            preferences['overlayAutoHideSeconds'] as int? ?? 0,
+      ),
+    );
   }
 
   /// Publishes the current state to the native widgets.
@@ -202,6 +249,24 @@ class WidgetBridge {
         speed: 0,
         etaSeconds: null,
       );
+    }
+  }
+
+  /// Opens a URL in the browser.
+  ///
+  /// Used by the About section and by the update screen, which link to the
+  /// repository and to a release page.
+  Future<bool> openUrl(String url) async {
+    try {
+      final bool? result = await _channel.invokeMethod<bool>(
+        'openUrl',
+        <String, dynamic>{'url': url},
+      );
+      return result ?? false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
     }
   }
 

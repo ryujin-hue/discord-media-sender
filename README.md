@@ -1,18 +1,22 @@
-# Discord Media Sender 2.0
+# Discord Media Sender 2.1
 
 **Smart, multi-destination media delivery for Discord — built on the 1.0 upload engine.**
 
-Discord Media Sender 2.0 is a production Android application that sends files, folders and
+Discord Media Sender 2.1 is a production Android application that sends files, folders and
 ZIP archives to Discord through webhooks and bot accounts. It adds Smart Auto Upload, a
 Media Gallery, an Advanced Analytics Center, Multi-Discord Distribution, a persistent
 Credential Manager, an Android home-screen widget, a floating overlay, an anti-duplication
 system, archive management and a live progress dashboard — all driven by a single centralised
 upload engine.
 
+The 2.1 release fixes the background upload lifecycle, replaces the version pill with the
+origami paper-plane brand mark and adds queue presets, a bandwidth cap, quiet hours, a batch
+retry, a CSV export of the upload jobs and a configurable widget density.
+
 | | |
 |---|---|
 | Application id | `com.dmsender.discord_media_sender` |
-| Version | 2.0.0 (versionCode 20000) |
+| Version | 2.1.0 (versionCode 20100) |
 | Minimum Android | 7.0 (API 24) |
 | Target / compile SDK | 36 |
 | Flutter | 3.47.9 stable · Dart 3.13.7 |
@@ -34,6 +38,48 @@ upload engine.
 - [Documentation index](#documentation-index)
 
 ---
+
+## What changed in 2.1
+
+### Fixed
+
+- **The foreground service now starts with the queue.** Uploads are no longer killed by the
+  system a moment after they begin, and work that a killed process left behind is picked up
+  again on the next start.
+- **Resume works after a process death.** The old guard skipped the resume when the engine
+  was not marked as paused, which is exactly the state a fresh process is in.
+- **The "start" command of the widget is no longer inert** — it runs the pending queue.
+- **The ETA is an average since the start of the job**, not the speed of the last chunk, so
+  it stays stable on a steady transfer.
+- **The About screen keeps its labels horizontal** on a 360 dp screen; the label column has
+  a fixed width and the value is ellipsised instead of wrapping.
+
+### New
+
+- **Queue presets** — a named set of destinations, caption template, duplicate policy and
+  maximum file size that fills the upload form with one tap. A preset whose destination was
+  deleted is marked invalid instead of silently uploading to fewer places.
+- **Bandwidth cap** — a global limit in KB/s that slows the transfer down for real. Discord
+  rate limits still apply on top of it.
+- **Quiet hours** — a local time window per destination. The automatic upload skips the
+  destination and reports the reason; a manual upload is only refused when the window is
+  marked strict.
+- **Batch retry** — every failed upload of the current history filter is queued again with
+  one action.
+- **Export jobs CSV** — the visible history as a CSV file, shared through the system sheet.
+  The export is redacted, so a webhook URL or a bot token can never end up in it.
+- **Widget density** — the home screen widget renders three lines or two.
+- **Safe resume** — the cold-start behaviour is configurable: never, ask, or resume
+  automatically.
+- **Overlay auto-hide** — the floating overlay hides itself while the engine is idle and the
+  queue is empty, and comes back as soon as there is work. Dismissing the overlay never
+  cancels an upload.
+
+### Brand
+
+The origami paper plane is the product mark: folded wing planes, a centre spine and a violet
+nose tip. It is used as the launcher icon, on the launch screen, in the About header and in
+the onboarding. The four variants live in `assets/brand/`.
 
 ## What changed since 1.0
 

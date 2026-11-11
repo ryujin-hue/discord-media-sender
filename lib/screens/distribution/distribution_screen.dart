@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -8,6 +10,7 @@ import '../../data/models.dart';
 import '../../providers/config_providers.dart';
 import '../../providers/upload_providers.dart';
 import '../../services/distribution_service.dart';
+import '../../services/quiet_hours_service.dart';
 import '../../services/upload_engine.dart';
 import '../../widgets/common.dart';
 
@@ -19,9 +22,8 @@ final FutureProvider<Map<String, DestinationStats>> _destinationStatsProvider =
 
 /// The multi-Discord distribution screen.
 ///
-/// Every destination owns an independent queue, so a slow or rate limited
-/// server never blocks the other destinations. This screen configures the
-/// destinations, the routing mode and the per destination performance.
+/// Every destination owns an independent queue. The screen owns three
+/// surfaces: the routing mode, the destination list and the queue statistics.
 class DistributionScreen extends ConsumerWidget {
   const DistributionScreen({super.key});
 
@@ -42,17 +44,15 @@ class DistributionScreen extends ConsumerWidget {
             ref.invalidate(_destinationStatsProvider);
           },
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
             children: <Widget>[
-              const _DistributionHeader(),
-              const SizedBox(height: 18),
-              _DistributionModeSection(mode: mode),
-              const SizedBox(height: 14),
+              const _ScreenHeader(),
+              const SizedBox(height: 12),
+              _RoutingModeSection(mode: mode),
+              const SizedBox(height: 12),
               _DestinationsSection(destinations: destinations),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
               _PerformanceSection(stats: stats),
-              const SizedBox(height: 14),
-              const _RuleHintCard(),
             ],
           ),
         ),
@@ -66,8 +66,8 @@ class DistributionScreen extends ConsumerWidget {
 // -----------------------------------------------------------------------------
 
 /// The title and the subtitle of the screen.
-class _DistributionHeader extends StatelessWidget {
-  const _DistributionHeader();
+class _ScreenHeader extends StatelessWidget {
+  const _ScreenHeader();
 
   @override
   Widget build(BuildContext context) {
@@ -75,15 +75,10 @@ class _DistributionHeader extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Text(
-          'Multi-Discord distribution',
-          style: theme.textTheme.headlineMedium,
-        ),
+        Text('Distribution', style: theme.textTheme.headlineMedium),
         const SizedBox(height: 4),
         Text(
-          'Every destination keeps its own queue. A file is routed to the '
-          'destinations that match the current mode, and a slow or rate limited '
-          'server never blocks the others.',
+          'Routing mode, destinations and queue statistics',
           style: theme.textTheme.bodySmall,
         ),
       ],
@@ -92,39 +87,47 @@ class _DistributionHeader extends StatelessWidget {
 }
 
 // -----------------------------------------------------------------------------
-// Distribution mode
+// Routing mode
 // -----------------------------------------------------------------------------
 
-/// The section that selects the routing mode.
-class _DistributionModeSection extends ConsumerWidget {
-  const _DistributionModeSection({required this.mode});
+/// The editor of the routing mode.
+///
+/// The mode is a global setting, so it lives in this section only. A
+/// destination row never carries a mode.
+class _RoutingModeSection extends ConsumerWidget {
+  const _RoutingModeSection({required this.mode});
 
   final DistributionMode mode;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return SectionCard(
-      title: 'Distribution mode',
+      title: 'Routing mode',
       subtitle: _modeDescription(mode),
       icon: Icons.alt_route_rounded,
-      trailing: StatusPill(
-        label: mode.label,
-        color: AppConstants.colorPrimary,
-        icon: Icons.check_rounded,
-      ),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
+      trailing: StatusPill(label: mode.label, color: AppConstants.colorPrimary),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          for (final DistributionMode option in DistributionMode.values)
-            ChoiceChip(
-              label: Text(option.label),
-              selected: option == mode,
-              onSelected: (bool selected) {
-                if (!selected) return;
-                ref.read(distributionModeProvider.notifier).set(option);
-              },
-            ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              for (final DistributionMode option in DistributionMode.values)
+                ChoiceChip(
+                  label: Text(option.label),
+                  selected: option == mode,
+                  onSelected: (bool selected) {
+                    if (!selected) return;
+                    ref.read(distributionModeProvider.notifier).set(option);
+                  },
+                ),
+            ],
+          ),
+          if (mode == DistributionMode.ruleBased) ...<Widget>[
+            const SizedBox(height: 12),
+            const _RuleExamples(),
+          ],
         ],
       ),
     );
@@ -134,22 +137,23 @@ class _DistributionModeSection extends ConsumerWidget {
 /// Explains what the selected routing mode does.
 String _modeDescription(DistributionMode mode) => switch (mode) {
   DistributionMode.broadcast =>
-    'Every enabled destination receives a copy of each file.',
+    'Every enabled destination receives every file.',
   DistributionMode.manual =>
-    'Only the destinations picked in the upload screen receive the file.',
-  DistributionMode.roundRobin =>
-    'The files are spread one by one over the enabled destinations.',
+    'Only the destinations picked on the upload screen.',
+  DistributionMode.roundRobin => 'One destination per file, in turn.',
   DistributionMode.sequential =>
-    'The files are queued to the enabled destinations one after the other.',
-  DistributionMode.ruleBased =>
-    'A destination receives a file when its note matches the file rules.',
+    'One destination at a time, in priority order.',
+  DistributionMode.ruleBased => 'Destinations whose note matches the file.',
 };
 
 // -----------------------------------------------------------------------------
 // Destinations
 // -----------------------------------------------------------------------------
 
-/// The section that lists the configured destinations.
+/// The list of the configured destinations.
+///
+/// A row carries the type, the name and the enabled switch. Everything else
+/// belongs to the destination editor or to the statistics section.
 class _DestinationsSection extends ConsumerWidget {
   const _DestinationsSection({required this.destinations});
 
@@ -157,203 +161,93 @@ class _DestinationsSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final ThemeData theme = Theme.of(context);
     final int enabled = destinations.where((Destination d) => d.enabled).length;
 
     return SectionCard(
       title: 'Destinations',
       subtitle: destinations.isEmpty
-          ? 'No destination configured yet'
+          ? 'None configured'
           : '$enabled of ${destinations.length} enabled',
       icon: Icons.hub_rounded,
       trailing: IconButton(
-        onPressed: () => _openAddDestinationSheet(context, ref),
+        onPressed: () => _openDestinationSheet(context, ref),
         icon: const Icon(Icons.add_rounded),
         tooltip: 'Add destination',
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          if (destinations.isEmpty)
-            Text(
-              'Add a webhook URL or a bot and a channel to start sending media '
-              'to several servers at once.',
-              style: theme.textTheme.bodySmall,
-            )
-          else
-            for (final Destination destination in destinations) ...<Widget>[
-              _DestinationCard(
-                destination: destination,
-                onToggle: (bool value) =>
-                    _setEnabled(context, ref, destination, value),
-                onRetry: () => _retryFailed(context, ref, destination),
-                onRemove: () => _removeDestination(context, ref, destination),
+      child: destinations.isEmpty
+          ? EmptyState(
+              icon: Icons.hub_outlined,
+              title: 'No destinations',
+              message: 'Add a webhook URL or a bot and a channel.',
+              action: FilledButton(
+                onPressed: () => _openDestinationSheet(context, ref),
+                child: const Text('Add destination'),
               ),
-              const SizedBox(height: 10),
-            ],
-          const SizedBox(height: 4),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: () => _openAddDestinationSheet(context, ref),
-              icon: const Icon(Icons.add_rounded, size: 18),
-              label: const Text('Add destination'),
+            )
+          : Column(
+              children: <Widget>[
+                for (final Destination destination in destinations)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _DestinationRow(
+                      destination: destination,
+                      onToggle: (bool value) =>
+                          _setEnabled(context, ref, destination, value),
+                      onEdit: () => _openDestinationSheet(
+                        context,
+                        ref,
+                        destination: destination,
+                      ),
+                    ),
+                  ),
+              ],
             ),
-          ),
-        ],
-      ),
     );
   }
 }
 
-/// A single destination with its state and its actions.
-class _DestinationCard extends StatelessWidget {
-  const _DestinationCard({
+/// A single destination row: type, name and enabled switch.
+class _DestinationRow extends StatelessWidget {
+  const _DestinationRow({
     required this.destination,
     required this.onToggle,
-    required this.onRetry,
-    required this.onRemove,
+    required this.onEdit,
   });
 
   final Destination destination;
   final ValueChanged<bool> onToggle;
-  final VoidCallback onRetry;
-  final VoidCallback onRemove;
+  final VoidCallback onEdit;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final bool isWebhook = destination.isWebhook;
-    final String channel =
-        destination.channelName ??
-        destination.channelId ??
-        (isWebhook ? 'Webhook channel' : 'No channel');
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(
-          alpha: 0.35,
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: theme.colorScheme.outline.withValues(alpha: 0.5),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Material(
+      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.28),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onEdit,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+          child: Row(
             children: <Widget>[
-              Icon(
-                isWebhook ? Icons.link_rounded : Icons.smart_toy_rounded,
-                size: 20,
-                color: destination.enabled
-                    ? AppConstants.colorSuccess
-                    : AppConstants.colorTextSecondary,
+              StatusPill(
+                label: destination.isWebhook ? 'Webhook' : 'Bot',
+                color: AppConstants.colorTextSecondary,
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      destination.name,
-                      style: theme.textTheme.titleSmall,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 2),
-                    Text(channel, style: theme.textTheme.bodySmall),
-                  ],
+                child: Text(
+                  destination.name,
+                  style: theme.textTheme.titleSmall,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               Switch(value: destination.enabled, onChanged: onToggle),
             ],
           ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: <Widget>[
-              StatusPill(
-                label: isWebhook ? 'Webhook' : 'Bot',
-                color: isWebhook
-                    ? AppConstants.colorSuccess
-                    : AppConstants.colorPrimary,
-              ),
-              StatusPill(
-                label: 'Priority ${destination.priority}',
-                color: AppConstants.colorTextSecondary,
-                icon: Icons.low_priority_rounded,
-              ),
-              StatusPill(
-                label: '${Formatters.count(destination.totalSent)} sent',
-                color: AppConstants.colorSuccess,
-                icon: Icons.check_circle_rounded,
-              ),
-              StatusPill(
-                label: '${Formatters.count(destination.totalFailed)} failed',
-                color: destination.totalFailed > 0
-                    ? AppConstants.colorError
-                    : AppConstants.colorTextSecondary,
-                icon: Icons.error_rounded,
-              ),
-              if (destination.totalPending > 0)
-                StatusPill(
-                  label:
-                      '${Formatters.count(destination.totalPending)} pending',
-                  color: AppConstants.colorWarning,
-                  icon: Icons.schedule_rounded,
-                ),
-              if (destination.isRateLimited)
-                const StatusPill(
-                  label: 'Rate limited',
-                  color: AppConstants.colorWarning,
-                  icon: Icons.speed_rounded,
-                ),
-            ],
-          ),
-          if (destination.lastError != null &&
-              destination.lastError!.isNotEmpty) ...<Widget>[
-            const SizedBox(height: 8),
-            Text(
-              destination.lastError!,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: AppConstants.colorError,
-              ),
-            ),
-          ],
-          const SizedBox(height: 12),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: onRetry,
-                  icon: const Icon(Icons.replay_rounded, size: 18),
-                  label: const Text('Retry failed'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: TextButton.icon(
-                  onPressed: onRemove,
-                  icon: const Icon(
-                    Icons.delete_outline_rounded,
-                    size: 18,
-                    color: AppConstants.colorError,
-                  ),
-                  label: const Text(
-                    'Remove',
-                    style: TextStyle(color: AppConstants.colorError),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -380,49 +274,15 @@ Future<void> _setEnabled(
   );
 }
 
-/// Requeues every failed job of a destination.
-Future<void> _retryFailed(
+/// Opens the editor of a destination.
+///
+/// Without [destination] the sheet creates a new one.
+Future<void> _openDestinationSheet(
   BuildContext context,
-  WidgetRef ref,
-  Destination destination,
-) async {
-  await UploadEngine.instance.retryFailedForDestination(destination.id);
-  if (!context.mounted) return;
-  showAppSnack(
-    context,
-    'The failed uploads of "${destination.name}" are queued again',
-    isSuccess: true,
-  );
-}
-
-/// Removes a destination after a confirmation.
-Future<void> _removeDestination(
-  BuildContext context,
-  WidgetRef ref,
-  Destination destination,
-) async {
-  final bool confirmed = await showConfirmDialog(
-    context,
-    title: 'Remove destination',
-    message:
-        'Remove "${destination.name}"? Its queued uploads are deleted as well.',
-    confirmLabel: 'Remove',
-    destructive: true,
-  );
-  if (!confirmed) return;
-  await DistributionService.instance.removeDestination(destination.id);
-  ref.invalidate(destinationsProvider);
-  ref.invalidate(_destinationStatsProvider);
-  if (!context.mounted) return;
-  showAppSnack(context, 'Destination removed', isSuccess: true);
-}
-
-/// Opens the bottom sheet that adds a destination.
-Future<void> _openAddDestinationSheet(
-  BuildContext context,
-  WidgetRef ref,
-) async {
-  final bool? added = await showModalBottomSheet<bool>(
+  WidgetRef ref, {
+  Destination? destination,
+}) async {
+  final String? result = await showModalBottomSheet<String>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
@@ -430,13 +290,19 @@ Future<void> _openAddDestinationSheet(
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
     ),
-    builder: (BuildContext context) => const _AddDestinationSheet(),
+    builder: (BuildContext context) =>
+        _DestinationSheet(destination: destination),
   );
-  if (added != true) return;
+  if (result == null) return;
   ref.invalidate(destinationsProvider);
   ref.invalidate(_destinationStatsProvider);
   if (!context.mounted) return;
-  showAppSnack(context, 'Destination added', isSuccess: true);
+  final String message = switch (result) {
+    'added' => 'Destination added',
+    'removed' => 'Destination removed',
+    _ => 'Destination saved',
+  };
+  showAppSnack(context, message, isSuccess: true);
 }
 
 // -----------------------------------------------------------------------------
@@ -456,10 +322,10 @@ class _PerformanceSection extends StatelessWidget {
         stats.value ?? const <String, DestinationStats>{};
 
     return SectionCard(
-      title: 'Destination performance',
+      title: 'Queue statistics',
       subtitle: values.isEmpty
           ? 'No queue activity recorded yet'
-          : '${values.length} destination(s) tracked',
+          : '${values.length} ${_plural(values.length, 'destination')} tracked',
       icon: Icons.insights_rounded,
       child: values.isEmpty
           ? Text(
@@ -472,7 +338,7 @@ class _PerformanceSection extends StatelessWidget {
               children: <Widget>[
                 for (final DestinationStats entry in values.values)
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 14),
+                    padding: const EdgeInsets.only(bottom: 12),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
@@ -490,9 +356,7 @@ class _PerformanceSection extends StatelessWidget {
                               label: entry.type == 'webhook'
                                   ? 'Webhook'
                                   : 'Bot',
-                              color: entry.type == 'webhook'
-                                  ? AppConstants.colorSuccess
-                                  : AppConstants.colorPrimary,
+                              color: AppConstants.colorTextSecondary,
                             ),
                           ],
                         ),
@@ -534,7 +398,6 @@ class _PerformanceSection extends StatelessWidget {
                                   : 'Rate limited until '
                                         '${_formatClock(entry.rateLimitUntil!)}',
                               color: AppConstants.colorWarning,
-                              icon: Icons.speed_rounded,
                             ),
                           ),
                       ],
@@ -547,51 +410,40 @@ class _PerformanceSection extends StatelessWidget {
 }
 
 // -----------------------------------------------------------------------------
-// Rule hint
+// Rule examples
 // -----------------------------------------------------------------------------
 
-/// Explains the destination note syntax used by the rule based routing.
-class _RuleHintCard extends StatelessWidget {
-  const _RuleHintCard();
+/// The destination note syntax of the rule based routing.
+class _RuleExamples extends StatelessWidget {
+  const _RuleExamples();
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    return SectionCard(
-      title: 'Rule based routing',
-      subtitle: 'Write the rules in the note of a destination',
-      icon: Icons.rule_rounded,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Text(
-            'The note of a destination acts as a filter. When the distribution '
-            'mode is "Rule based", a file is only sent to a destination when '
-            'one of its rules matches. Several rules are separated by commas '
-            'and a file matches as soon as a single rule matches.',
-            style: theme.textTheme.bodySmall,
-          ),
-          const SizedBox(height: 12),
-          const _RuleExample(
-            rule: 'ext:jpg',
-            description: 'Only the files whose extension is jpg.',
-          ),
-          const _RuleExample(
-            rule: 'cat:image',
-            description:
-                'Only the images: image, video, audio, document or other.',
-          ),
-          const _RuleExample(
-            rule: 'size:25',
-            description: 'Only the files of 25 MB or less.',
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'A destination without a note receives every file.',
-            style: theme.textTheme.labelSmall,
-          ),
-        ],
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text('Note syntax', style: theme.textTheme.titleSmall),
+        const SizedBox(height: 8),
+        const _RuleExample(
+          rule: 'ext:jpg',
+          description: 'Files with the extension jpg.',
+        ),
+        const _RuleExample(
+          rule: 'cat:image',
+          description: 'Images, video, audio, document or other.',
+        ),
+        const _RuleExample(
+          rule: 'size:25',
+          description: 'Files of 25 MB or less.',
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Rules are separated by commas. A destination without a note receives '
+          'every file.',
+          style: theme.textTheme.labelSmall,
+        ),
+      ],
     );
   }
 }
@@ -614,14 +466,14 @@ class _RuleExample extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-              color: AppConstants.colorPrimary.withValues(alpha: 0.12),
+              color: theme.colorScheme.surfaceContainerHighest.withValues(
+                alpha: 0.6,
+              ),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
               rule,
-              style: const TextStyle(
-                color: AppConstants.colorPrimary,
-                fontSize: 12,
+              style: theme.textTheme.labelSmall?.copyWith(
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -635,28 +487,57 @@ class _RuleExample extends StatelessWidget {
 }
 
 // -----------------------------------------------------------------------------
-// Add destination sheet
+// Destination editor
 // -----------------------------------------------------------------------------
 
-/// The bottom sheet that adds a webhook or a bot destination.
-class _AddDestinationSheet extends ConsumerStatefulWidget {
-  const _AddDestinationSheet();
+/// The editor of one destination.
+///
+/// Without a [destination] the sheet creates a new one. The sheet owns the
+/// quiet hours of the destination, because those are keyed by its id.
+class _DestinationSheet extends ConsumerStatefulWidget {
+  const _DestinationSheet({this.destination});
+
+  final Destination? destination;
 
   @override
-  ConsumerState<_AddDestinationSheet> createState() =>
-      _AddDestinationSheetState();
+  ConsumerState<_DestinationSheet> createState() => _DestinationSheetState();
 }
 
-class _AddDestinationSheetState extends ConsumerState<_AddDestinationSheet> {
+class _DestinationSheetState extends ConsumerState<_DestinationSheet> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _urlController = TextEditingController();
   final TextEditingController _channelIdController = TextEditingController();
   final TextEditingController _channelNameController = TextEditingController();
+  final TextEditingController _noteController = TextEditingController();
+  final TextEditingController _priorityController = TextEditingController();
+
   bool _isBot = false;
   String? _profileId;
   bool _saving = false;
+  bool _showUrl = false;
   String? _error;
+
+  // Quiet hours of the destination.
+  bool _quietEnabled = false;
+  int _startMinute = 22 * 60;
+  int _endMinute = 7 * 60;
+  bool _strict = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final Destination? destination = widget.destination;
+    if (destination == null) return;
+    _isBot = !destination.isWebhook;
+    _profileId = destination.credentialProfileId;
+    _nameController.text = destination.name;
+    _channelIdController.text = destination.channelId ?? '';
+    _channelNameController.text = destination.channelName ?? '';
+    _noteController.text = destination.note ?? '';
+    _priorityController.text = '${destination.priority}';
+    unawaited(_loadQuietHours(destination.id));
+  }
 
   @override
   void dispose() {
@@ -664,12 +545,49 @@ class _AddDestinationSheetState extends ConsumerState<_AddDestinationSheet> {
     _urlController.dispose();
     _channelIdController.dispose();
     _channelNameController.dispose();
+    _noteController.dispose();
+    _priorityController.dispose();
     super.dispose();
+  }
+
+  /// Reads the stored quiet hours of the edited destination.
+  Future<void> _loadQuietHours(String destinationId) async {
+    final QuietHours? hours = await QuietHoursService.instance.forDestination(
+      destinationId,
+    );
+    if (!mounted) return;
+    setState(() {
+      _quietEnabled = hours?.enabled ?? false;
+      _startMinute = hours?.startMinute ?? _startMinute;
+      _endMinute = hours?.endMinute ?? _endMinute;
+      _strict = hours?.strict ?? false;
+    });
+  }
+
+  /// Stores the quiet hours of the destination.
+  Future<void> _saveQuietHours(String destinationId) async {
+    if (!_quietEnabled) {
+      await QuietHoursService.instance.remove(destinationId);
+      return;
+    }
+    await QuietHoursService.instance.save(
+      QuietHours(
+        destinationId: destinationId,
+        enabled: true,
+        startMinute: _startMinute,
+        endMinute: _endMinute,
+        strict: _strict,
+        updatedAt: DateTime.now(),
+      ),
+    );
   }
 
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    if (_isBot && (_profileId == null || _profileId!.isEmpty)) {
+    final Destination? existing = widget.destination;
+    if (existing == null &&
+        _isBot &&
+        (_profileId == null || _profileId!.isEmpty)) {
       setState(() => _error = 'Pick the bot profile that posts the files.');
       return;
     }
@@ -677,49 +595,150 @@ class _AddDestinationSheetState extends ConsumerState<_AddDestinationSheet> {
       _saving = true;
       _error = null;
     });
+
     final String name = _nameController.text.trim();
+    final String channelId = _channelIdController.text.trim();
     final String channelName = _channelNameController.text.trim();
+    final String url = _urlController.text.trim();
+    final String note = _noteController.text.trim();
+    final int priority = int.tryParse(_priorityController.text.trim()) ?? 0;
+
     try {
-      if (_isBot) {
-        await DistributionService.instance.addBotDestination(
-          name: name,
-          credentialProfileId: _profileId!,
-          channelId: _channelIdController.text.trim(),
-          channelName: channelName.isEmpty ? null : channelName,
-        );
+      final Destination destination;
+      if (existing == null) {
+        if (_isBot) {
+          destination = await DistributionService.instance.addBotDestination(
+            name: name,
+            credentialProfileId: _profileId!,
+            channelId: channelId,
+            channelName: channelName.isEmpty ? null : channelName,
+            priority: priority,
+          );
+        } else {
+          destination = await DistributionService.instance
+              .addWebhookDestination(
+                name: name,
+                webhookUrl: url,
+                channelName: channelName.isEmpty ? null : channelName,
+                priority: priority,
+              );
+        }
       } else {
-        await DistributionService.instance.addWebhookDestination(
+        destination = existing.copyWith(
           name: name,
-          webhookUrl: _urlController.text.trim(),
-          channelName: channelName.isEmpty ? null : channelName,
+          channelId: channelId.isEmpty ? existing.channelId : channelId,
+          channelName: channelName.isEmpty ? existing.channelName : channelName,
+          // An empty field keeps the stored webhook URL, which is never
+          // rendered in plain text.
+          webhookId: url.isEmpty ? existing.webhookId : url,
+          priority: priority,
+          note: note,
         );
+        await DistributionService.instance.updateDestination(destination);
       }
+      await _saveQuietHours(destination.id);
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _saving = false;
-        _error = 'The destination could not be created.';
+        _error = 'The destination could not be saved.';
       });
       return;
     }
     if (!mounted) return;
-    Navigator.of(context).pop(true);
+    Navigator.of(context).pop(existing == null ? 'added' : 'saved');
+  }
+
+  /// Requeues every failed job of the edited destination.
+  Future<void> _retryFailed() async {
+    final Destination? destination = widget.destination;
+    if (destination == null) return;
+    await UploadEngine.instance.retryFailedForDestination(destination.id);
+    if (!mounted) return;
+    showAppSnack(
+      context,
+      'The failed uploads of "${destination.name}" are queued again',
+      isSuccess: true,
+    );
+  }
+
+  /// Removes the edited destination after a confirmation.
+  Future<void> _remove() async {
+    final Destination? destination = widget.destination;
+    if (destination == null) return;
+    final bool confirmed = await showConfirmDialog(
+      context,
+      title: 'Remove destination',
+      message:
+          'Remove "${destination.name}"? Its queued uploads are deleted as well.',
+      confirmLabel: 'Remove',
+      destructive: true,
+    );
+    if (!confirmed) return;
+    await DistributionService.instance.removeDestination(destination.id);
+    await QuietHoursService.instance.remove(destination.id);
+    if (!mounted) return;
+    Navigator.of(context).pop('removed');
+  }
+
+  Future<void> _pickTime({required bool isStart}) async {
+    final int current = isStart ? _startMinute : _endMinute;
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: current ~/ 60, minute: current % 60),
+      helpText: isStart ? 'Quiet hours start' : 'Quiet hours end',
+    );
+    if (picked == null) return;
+    setState(() {
+      if (isStart) {
+        _startMinute = picked.hour * 60 + picked.minute;
+      } else {
+        _endMinute = picked.hour * 60 + picked.minute;
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    final bool isNew = widget.destination == null;
     final List<CredentialProfile> bots =
         (ref.watch(credentialProfilesProvider).value ??
                 const <CredentialProfile>[])
             .where((CredentialProfile profile) => profile.type == 'bot')
             .toList();
+    final List<DropdownMenuItem<String>> profileItems =
+        <DropdownMenuItem<String>>[
+          for (final CredentialProfile profile in bots)
+            DropdownMenuItem<String>(
+              value: profile.id,
+              child: Text(profile.name, overflow: TextOverflow.ellipsis),
+            ),
+        ];
+    if (_profileId != null &&
+        !bots.any((CredentialProfile profile) => profile.id == _profileId)) {
+      profileItems.add(
+        DropdownMenuItem<String>(
+          value: _profileId,
+          child: const Text('Removed profile'),
+        ),
+      );
+    }
+    final QuietHours preview = QuietHours(
+      destinationId: widget.destination?.id ?? '',
+      enabled: true,
+      startMinute: _startMinute,
+      endMinute: _endMinute,
+      strict: _strict,
+      updatedAt: DateTime.now(),
+    );
+    final bool activeNow = preview.contains(DateTime.now());
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
-        20,
-        20,
-        20,
+        16,
+        16,
+        16,
         MediaQuery.viewInsetsOf(context).bottom + 24,
       ),
       child: SingleChildScrollView(
@@ -729,36 +748,39 @@ class _AddDestinationSheetState extends ConsumerState<_AddDestinationSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              Text('Add destination', style: theme.textTheme.titleLarge),
+              Text(
+                isNew ? 'Add destination' : 'Destination',
+                style: theme.textTheme.titleLarge,
+              ),
               const SizedBox(height: 4),
               Text(
-                'A destination receives a copy of every routed file.',
+                _isBot ? 'Bot and channel' : 'Webhook URL',
                 style: theme.textTheme.bodySmall,
               ),
               const SizedBox(height: 16),
-              SegmentedButton<bool>(
-                segments: const <ButtonSegment<bool>>[
-                  ButtonSegment<bool>(
-                    value: false,
-                    label: Text('Webhook URL'),
-                    icon: Icon(Icons.link_rounded, size: 18),
-                  ),
-                  ButtonSegment<bool>(
-                    value: true,
-                    label: Text('Bot + channel'),
-                    icon: Icon(Icons.smart_toy_rounded, size: 18),
-                  ),
-                ],
-                selected: <bool>{_isBot},
-                showSelectedIcon: false,
-                onSelectionChanged: (Set<bool> selection) {
-                  setState(() {
-                    _isBot = selection.first;
-                    _error = null;
-                  });
-                },
-              ),
-              const SizedBox(height: 16),
+              if (isNew) ...<Widget>[
+                SegmentedButton<bool>(
+                  segments: const <ButtonSegment<bool>>[
+                    ButtonSegment<bool>(
+                      value: false,
+                      label: Text('Webhook URL'),
+                    ),
+                    ButtonSegment<bool>(
+                      value: true,
+                      label: Text('Bot + channel'),
+                    ),
+                  ],
+                  selected: <bool>{_isBot},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (Set<bool> selection) {
+                    setState(() {
+                      _isBot = selection.first;
+                      _error = null;
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+              ],
               TextFormField(
                 controller: _nameController,
                 textInputAction: TextInputAction.next,
@@ -770,7 +792,7 @@ class _AddDestinationSheetState extends ConsumerState<_AddDestinationSheet> {
               ),
               const SizedBox(height: 12),
               if (_isBot) ...<Widget>[
-                if (bots.isEmpty)
+                if (bots.isEmpty && isNew)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: Text(
@@ -786,18 +808,13 @@ class _AddDestinationSheetState extends ConsumerState<_AddDestinationSheet> {
                     initialValue: _profileId,
                     isExpanded: true,
                     decoration: const InputDecoration(labelText: 'Bot profile'),
-                    items: <DropdownMenuItem<String>>[
-                      for (final CredentialProfile profile in bots)
-                        DropdownMenuItem<String>(
-                          value: profile.id,
-                          child: Text(
-                            profile.name,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                    ],
+                    items: profileItems,
                     onChanged: (String? value) =>
                         setState(() => _profileId = value),
+                    validator: (String? value) =>
+                        _isBot && (value == null || value.isEmpty)
+                        ? 'Pick the bot profile'
+                        : null,
                   ),
                 const SizedBox(height: 12),
                 TextFormField(
@@ -807,18 +824,35 @@ class _AddDestinationSheetState extends ConsumerState<_AddDestinationSheet> {
                     labelText: 'Channel ID',
                     hintText: '17-20 digit snowflake',
                   ),
-                  validator: Validators.channelId,
+                  validator: _isBot ? Validators.channelId : null,
                 ),
                 const SizedBox(height: 12),
               ] else
                 TextFormField(
                   controller: _urlController,
                   keyboardType: TextInputType.url,
-                  decoration: const InputDecoration(
+                  obscureText: !_showUrl,
+                  decoration: InputDecoration(
                     labelText: 'Webhook URL',
-                    hintText: 'https://discord.com/api/webhooks/…',
+                    hintText: isNew
+                        ? 'https://discord.com/api/webhooks/…'
+                        : 'Stored — leave empty to keep it',
+                    suffixIcon: IconButton(
+                      onPressed: () => setState(() => _showUrl = !_showUrl),
+                      icon: Icon(
+                        _showUrl
+                            ? Icons.visibility_off_rounded
+                            : Icons.visibility_rounded,
+                        size: 18,
+                      ),
+                      tooltip: _showUrl ? 'Hide' : 'Show',
+                    ),
                   ),
-                  validator: Validators.webhookUrl,
+                  validator: isNew
+                      ? Validators.webhookUrl
+                      : (String? value) => (value ?? '').trim().isEmpty
+                            ? null
+                            : Validators.webhookUrl(value),
                 ),
               const SizedBox(height: 12),
               TextFormField(
@@ -828,6 +862,80 @@ class _AddDestinationSheetState extends ConsumerState<_AddDestinationSheet> {
                   hintText: 'general',
                 ),
               ),
+              const SizedBox(height: 12),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: TextFormField(
+                      controller: _priorityController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Priority',
+                        hintText: '0',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 2,
+                    child: TextFormField(
+                      controller: _noteController,
+                      decoration: const InputDecoration(
+                        labelText: 'Rule note (optional)',
+                        hintText: 'ext:jpg, size:25',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Text('Quiet hours', style: theme.textTheme.titleSmall),
+              const SizedBox(height: 4),
+              Text(
+                'Auto upload skips the destination inside the window',
+                style: theme.textTheme.bodySmall,
+              ),
+              SwitchListTile(
+                value: _quietEnabled,
+                onChanged: (bool value) =>
+                    setState(() => _quietEnabled = value),
+                title: const Text('Enable quiet hours'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              ),
+              if (_quietEnabled) ...<Widget>[
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: _TimeField(
+                        label: 'Start',
+                        minute: _startMinute,
+                        onPick: () => _pickTime(isStart: true),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _TimeField(
+                        label: 'End',
+                        minute: _endMinute,
+                        onPick: () => _pickTime(isStart: false),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  value: _strict,
+                  onChanged: (bool value) => setState(() => _strict = value),
+                  title: const Text('Also block manual uploads'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+                Text(
+                  '${preview.label} · ${activeNow ? 'active now' : 'inactive now'}',
+                  style: theme.textTheme.labelSmall,
+                ),
+              ],
               if (_error != null) ...<Widget>[
                 const SizedBox(height: 12),
                 Text(
@@ -837,26 +945,50 @@ class _AddDestinationSheetState extends ConsumerState<_AddDestinationSheet> {
                   ),
                 ),
               ],
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
               Row(
                 children: <Widget>[
                   Expanded(
                     child: OutlinedButton(
                       onPressed: _saving
                           ? null
-                          : () => Navigator.of(context).pop(false),
+                          : () => Navigator.of(context).pop(),
                       child: const Text('Cancel'),
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: FilledButton(
                       onPressed: _saving ? null : _save,
-                      child: Text(_saving ? 'Adding…' : 'Add destination'),
+                      child: Text(_saving ? 'Saving…' : 'Save'),
                     ),
                   ),
                 ],
               ),
+              if (!isNew) ...<Widget>[
+                const SizedBox(height: 12),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: TextButton(
+                        onPressed: _retryFailed,
+                        child: const Text('Retry failed'),
+                      ),
+                    ),
+                    Expanded(
+                      child: TextButton(
+                        onPressed: _remove,
+                        child: Text(
+                          'Remove',
+                          style: theme.textTheme.labelLarge?.copyWith(
+                            color: AppConstants.colorError,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
@@ -865,9 +997,51 @@ class _AddDestinationSheetState extends ConsumerState<_AddDestinationSheet> {
   }
 }
 
+/// A time button that opens the time picker.
+class _TimeField extends StatelessWidget {
+  const _TimeField({
+    required this.label,
+    required this.minute,
+    required this.onPick,
+  });
+
+  final String label;
+  final int minute;
+  final VoidCallback onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(label, style: theme.textTheme.labelSmall),
+        const SizedBox(height: 4),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton(
+            onPressed: onPick,
+            child: Text(_formatMinute(minute)),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
+
+/// The plural form of a count, for example `1 destination` or `2 destinations`.
+String _plural(int count, String noun) => count == 1 ? noun : '${noun}s';
+
+/// Formats a minute after midnight as `HH:MM`.
+String _formatMinute(int minute) {
+  final String hour = ((minute ~/ 60) % 24).toString().padLeft(2, '0');
+  final String rest = (minute % 60).toString().padLeft(2, '0');
+  return '$hour:$rest';
+}
 
 /// Formats a timestamp as a short relative duration.
 String _formatRelative(DateTime? time) {

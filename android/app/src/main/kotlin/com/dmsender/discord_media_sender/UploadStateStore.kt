@@ -33,6 +33,8 @@ object UploadStateStore {
     const val KEY_CURRENT_FILE = "currentFileName"
     const val KEY_DESTINATION = "activeDestinationName"
     const val KEY_IS_PAUSED = "isPaused"
+    const val KEY_DENSITY = "density"
+    const val KEY_OVERLAY_AUTO_HIDE = "overlayAutoHideSeconds"
     const val KEY_UPDATED_AT = "updatedAt"
 
     private fun prefs(context: Context): SharedPreferences =
@@ -54,6 +56,11 @@ object UploadStateStore {
             putString(KEY_CURRENT_FILE, state[KEY_CURRENT_FILE] as? String ?: "")
             putString(KEY_DESTINATION, state[KEY_DESTINATION] as? String ?: "")
             putBoolean(KEY_IS_PAUSED, state[KEY_IS_PAUSED] as? Boolean ?: false)
+            putString(KEY_DENSITY, state[KEY_DENSITY] as? String ?: "normal")
+            putInt(
+                KEY_OVERLAY_AUTO_HIDE,
+                (state[KEY_OVERLAY_AUTO_HIDE] as? Number)?.toInt() ?: 0
+            )
             putLong(KEY_UPDATED_AT, (state[KEY_UPDATED_AT] as? Number)?.toLong() ?: 0L)
         }
     }
@@ -75,6 +82,8 @@ object UploadStateStore {
             KEY_CURRENT_FILE to (p.getString(KEY_CURRENT_FILE, "") ?: ""),
             KEY_DESTINATION to (p.getString(KEY_DESTINATION, "") ?: ""),
             KEY_IS_PAUSED to p.getBoolean(KEY_IS_PAUSED, false),
+            KEY_DENSITY to (p.getString(KEY_DENSITY, "normal") ?: "normal"),
+            KEY_OVERLAY_AUTO_HIDE to p.getInt(KEY_OVERLAY_AUTO_HIDE, 0),
             KEY_UPDATED_AT to p.getLong(KEY_UPDATED_AT, 0L)
         )
     }

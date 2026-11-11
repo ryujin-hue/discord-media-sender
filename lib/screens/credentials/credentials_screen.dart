@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants.dart';
+import '../../core/security.dart';
 import '../../core/validators.dart';
 import '../../data/models.dart';
 import '../../providers/config_providers.dart';
@@ -38,14 +39,8 @@ class CredentialsScreen extends ConsumerWidget {
           title: const Text('Credential manager'),
           bottom: const TabBar(
             tabs: <Widget>[
-              Tab(
-                text: 'Bot profiles',
-                icon: Icon(Icons.smart_toy_rounded, size: 18),
-              ),
-              Tab(
-                text: 'Webhook profiles',
-                icon: Icon(Icons.link_rounded, size: 18),
-              ),
+              Tab(text: 'Bot profiles'),
+              Tab(text: 'Webhook profiles'),
             ],
           ),
         ),
@@ -54,7 +49,7 @@ class CredentialsScreen extends ConsumerWidget {
             children: <Widget>[
               const Padding(
                 padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
-                child: _SecurityNoteCard(),
+                child: _SecurityNote(),
               ),
               Expanded(
                 child: TabBarView(
@@ -76,18 +71,18 @@ class CredentialsScreen extends ConsumerWidget {
 // Security note
 // -----------------------------------------------------------------------------
 
-/// The prominent explanation of how credentials are protected.
-class _SecurityNoteCard extends StatelessWidget {
-  const _SecurityNoteCard();
+/// The short explanation of how credentials are protected.
+class _SecurityNote extends StatelessWidget {
+  const _SecurityNote();
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: AppConstants.colorSuccess.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: AppConstants.colorSuccess.withValues(alpha: 0.30),
         ),
@@ -97,29 +92,15 @@ class _SecurityNoteCard extends StatelessWidget {
         children: <Widget>[
           const Icon(
             Icons.shield_rounded,
-            size: 20,
+            size: 18,
             color: AppConstants.colorSuccess,
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  'Your secrets stay on this device',
-                  style: theme.textTheme.titleSmall,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Bot tokens and webhook URLs are stored in Android Keystore '
-                  'backed secure storage. They are never written to the app '
-                  'database, never to logs and never to analytics, and they '
-                  'are masked in the interface by default. Uninstalling the '
-                  'app or clearing its data destroys the Keystore key, so every '
-                  'stored credential is removed with it.',
-                  style: theme.textTheme.bodySmall,
-                ),
-              ],
+            child: Text(
+              'Tokens and webhook URLs are stored in the Android Keystore. They '
+              'are never written to the database, the logs or an export.',
+              style: theme.textTheme.bodySmall,
             ),
           ),
         ],
@@ -153,7 +134,7 @@ class _BotProfilesTab extends ConsumerWidget {
                 label: const Text('Add profile'),
               ),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             Expanded(
               child: OutlinedButton.icon(
                 onPressed: profiles.isEmpty
@@ -167,12 +148,15 @@ class _BotProfilesTab extends ConsumerWidget {
         ),
         const SizedBox(height: 16),
         if (profiles.isEmpty)
-          const _EmptyProfiles(
-            icon: Icons.smart_toy_outlined,
-            title: 'No bot profile yet',
-            message:
-                'Add a bot profile with its token to unlock the bot features '
-                'and to create webhooks from Discord itself.',
+          const SizedBox(
+            height: 280,
+            child: EmptyState(
+              icon: Icons.smart_toy_outlined,
+              title: 'No bot profile',
+              message:
+                  'Add a profile with its token to enable bot uploads and to '
+                  'create webhooks from Discord.',
+            ),
           )
         else
           for (final CredentialProfile profile in profiles) ...<Widget>[
@@ -182,7 +166,7 @@ class _BotProfilesTab extends ConsumerWidget {
                   _validateProfile(context, ref, profile, isBot: true),
               onReplace: () =>
                   _openReplaceSecretDialog(context, ref, profile, isBot: true),
-              onRemove: () => _removeProfile(context, ref, profile),
+              onDelete: () => _deleteProfile(context, ref, profile),
               onTest: () => _openTestConnectionDialog(context, ref, profile),
             ),
             const SizedBox(height: 12),
@@ -214,12 +198,15 @@ class _WebhookProfilesTab extends ConsumerWidget {
         ),
         const SizedBox(height: 16),
         if (profiles.isEmpty)
-          const _EmptyProfiles(
-            icon: Icons.link_off_rounded,
-            title: 'No webhook profile yet',
-            message:
-                'Add a webhook profile with its URL, or create a webhook from '
-                'the bot tab and let the app build the URL for you.',
+          const SizedBox(
+            height: 280,
+            child: EmptyState(
+              icon: Icons.link_off_rounded,
+              title: 'No webhook profile',
+              message:
+                  'Add a webhook profile with its URL, or create a webhook from '
+                  'the bot tab.',
+            ),
           )
         else
           for (final CredentialProfile profile in profiles) ...<Widget>[
@@ -229,7 +216,8 @@ class _WebhookProfilesTab extends ConsumerWidget {
                   _validateProfile(context, ref, profile, isBot: false),
               onReplace: () =>
                   _openReplaceSecretDialog(context, ref, profile, isBot: false),
-              onRemove: () => _removeProfile(context, ref, profile),
+              onDelete: () => _deleteProfile(context, ref, profile),
+              onTest: () => _testWebhook(context, ref, profile),
             ),
             const SizedBox(height: 12),
           ],
@@ -242,26 +230,33 @@ class _WebhookProfilesTab extends ConsumerWidget {
 // Profile card
 // -----------------------------------------------------------------------------
 
-/// A single credential profile with its status and its actions.
+/// A single credential profile with its masked secret and its actions.
 class _ProfileCard extends StatelessWidget {
   const _ProfileCard({
     required this.profile,
     required this.onValidate,
     required this.onReplace,
-    required this.onRemove,
+    required this.onDelete,
     this.onTest,
   });
 
   final CredentialProfile profile;
   final VoidCallback onValidate;
   final VoidCallback onReplace;
-  final VoidCallback onRemove;
+  final VoidCallback onDelete;
   final VoidCallback? onTest;
+
+  /// The mask that replaces a stored secret.
+  ///
+  /// The real value is never read back from the secure store, so the mask has
+  /// a fixed length and never hints at the length of the secret.
+  static const String _mask = '••••••••••••';
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final bool isBot = profile.type == 'bot';
+    final bool hasSecret = isBot ? profile.hasBotToken : profile.hasWebhook;
     final Color statusColor = profile.isValid == null
         ? AppConstants.colorTextSecondary
         : (profile.isValid!
@@ -271,181 +266,52 @@ class _ProfileCard extends StatelessWidget {
         ? 'Unknown'
         : (profile.isValid! ? 'Valid' : 'Invalid');
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                Icon(
-                  isBot ? Icons.smart_toy_rounded : Icons.link_rounded,
-                  size: 20,
-                  color: theme.colorScheme.primary,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    profile.name,
-                    style: theme.textTheme.titleMedium,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                StatusPill(
-                  label: isBot ? 'Bot' : 'Webhook',
-                  color: isBot
-                      ? AppConstants.colorPrimary
-                      : AppConstants.colorSuccess,
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: <Widget>[
-                StatusPill(
-                  label: statusLabel,
-                  color: statusColor,
-                  icon: profile.isValid == null
-                      ? Icons.help_outline_rounded
-                      : (profile.isValid!
-                            ? Icons.check_circle_rounded
-                            : Icons.error_rounded),
-                ),
-                if (profile.botUserName != null &&
-                    profile.botUserName!.isNotEmpty)
-                  _InfoChip(
-                    icon: Icons.badge_outlined,
-                    label: profile.botUserName!,
-                  ),
-                _InfoChip(
-                  icon: Icons.schedule_rounded,
-                  label: 'Checked ${_formatRelative(profile.lastValidatedAt)}',
-                ),
-              ],
-            ),
-            if (profile.statusMessage != null &&
-                profile.statusMessage!.isNotEmpty) ...<Widget>[
-              const SizedBox(height: 10),
-              Text(profile.statusMessage!, style: theme.textTheme.bodySmall),
-            ],
-            const SizedBox(height: 14),
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: onValidate,
-                    icon: const Icon(Icons.verified_rounded, size: 18),
-                    label: const Text('Validate'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: onReplace,
-                    icon: const Icon(Icons.password_rounded, size: 18),
-                    label: Text(isBot ? 'Replace token' : 'Replace URL'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: <Widget>[
-                if (onTest != null) ...<Widget>[
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: onTest,
-                      icon: const Icon(Icons.wifi_tethering_rounded, size: 18),
-                      label: const Text('Test connection'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                Expanded(
-                  child: TextButton.icon(
-                    onPressed: onRemove,
-                    icon: const Icon(
-                      Icons.delete_outline_rounded,
-                      size: 18,
-                      color: AppConstants.colorError,
-                    ),
-                    label: const Text(
-                      'Remove',
-                      style: TextStyle(color: AppConstants.colorError),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// A compact icon plus label chip used inside a profile card.
-class _InfoChip extends StatelessWidget {
-  const _InfoChip({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(
-          alpha: 0.45,
-        ),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Icon(icon, size: 13, color: theme.colorScheme.onSurfaceVariant),
-          const SizedBox(width: 5),
-          Text(label, style: theme.textTheme.labelSmall),
-        ],
-      ),
-    );
-  }
-}
-
-/// The placeholder shown when a tab has no profile yet.
-class _EmptyProfiles extends StatelessWidget {
-  const _EmptyProfiles({
-    required this.icon,
-    required this.title,
-    required this.message,
-  });
-
-  final IconData icon;
-  final String title;
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 26),
+    return SectionCard(
+      title: profile.name,
+      subtitle: isBot ? 'Bot profile' : 'Webhook profile',
+      icon: isBot ? Icons.smart_toy_rounded : Icons.link_rounded,
+      trailing: StatusPill(label: statusLabel, color: statusColor),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Icon(icon, size: 34, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(height: 12),
-          Text(title, style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 6),
-          Text(
-            message,
-            style: Theme.of(context).textTheme.bodySmall,
-            textAlign: TextAlign.center,
+          MetricRow(
+            label: isBot ? 'Bot token' : 'Webhook URL',
+            value: hasSecret ? _mask : 'Not set',
+          ),
+          if (profile.botUserName != null && profile.botUserName!.isNotEmpty)
+            MetricRow(label: 'Bot user', value: profile.botUserName!),
+          MetricRow(
+            label: 'Checked',
+            value: _formatRelative(profile.lastValidatedAt),
+          ),
+          if (profile.statusMessage != null &&
+              profile.statusMessage!.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 4),
+            Text(profile.statusMessage!, style: theme.textTheme.bodySmall),
+          ],
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              OutlinedButton(
+                onPressed: onValidate,
+                child: const Text('Validate'),
+              ),
+              if (onTest != null)
+                OutlinedButton(onPressed: onTest, child: const Text('Test')),
+              OutlinedButton(
+                onPressed: onReplace,
+                child: Text(isBot ? 'Replace token' : 'Replace URL'),
+              ),
+              TextButton(
+                onPressed: onDelete,
+                style: TextButton.styleFrom(
+                  foregroundColor: AppConstants.colorError,
+                ),
+                child: const Text('Delete'),
+              ),
+            ],
           ),
         ],
       ),
@@ -478,26 +344,26 @@ Future<void> _validateProfile(
   );
 }
 
-/// Removes a profile and its stored secret after a confirmation.
-Future<void> _removeProfile(
+/// Deletes a profile and its stored secret after a confirmation.
+Future<void> _deleteProfile(
   BuildContext context,
   WidgetRef ref,
   CredentialProfile profile,
 ) async {
   final bool confirmed = await showConfirmDialog(
     context,
-    title: 'Remove profile',
+    title: 'Delete profile',
     message:
-        'Remove "${profile.name}" and delete its stored secret? The profile '
-        'cannot be recovered afterwards.',
-    confirmLabel: 'Remove',
+        'Delete "${profile.name}" and its stored secret? The profile cannot '
+        'be recovered afterwards.',
+    confirmLabel: 'Delete',
     destructive: true,
   );
   if (!confirmed) return;
   await DistributionService.instance.removeProfile(profile.id);
   ref.invalidate(credentialProfilesProvider);
   if (!context.mounted) return;
-  showAppSnack(context, 'Profile "${profile.name}" removed', isSuccess: true);
+  showAppSnack(context, 'Profile "${profile.name}" deleted', isSuccess: true);
 }
 
 /// Opens the dialog that adds a new credential profile.
@@ -565,6 +431,28 @@ Future<void> _openTestConnectionDialog(
   );
 }
 
+/// Sends a test message through a webhook profile.
+///
+/// A webhook carries its own channel, so no channel id is needed.
+Future<void> _testWebhook(
+  BuildContext context,
+  WidgetRef ref,
+  CredentialProfile profile,
+) async {
+  final bool success = await DistributionService.instance.testProfile(
+    profile.id,
+  );
+  if (!context.mounted) return;
+  showAppSnack(
+    context,
+    success
+        ? 'Test message sent'
+        : 'The test message could not be sent. Check the webhook URL.',
+    isSuccess: success,
+    isError: !success,
+  );
+}
+
 /// Opens the flow that creates a webhook with a bot profile.
 Future<void> _openCreateWebhookDialog(
   BuildContext context,
@@ -599,7 +487,6 @@ class _AddProfileDialogState extends ConsumerState<_AddProfileDialog> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _secretController = TextEditingController();
-  bool _obscured = true;
   bool _saving = false;
 
   @override
@@ -657,23 +544,14 @@ class _AddProfileDialogState extends ConsumerState<_AddProfileDialog> {
             const SizedBox(height: 12),
             TextFormField(
               controller: _secretController,
-              obscureText: _obscured,
+              obscureText: true,
               maxLines: 1,
               decoration: InputDecoration(
                 labelText: widget.isBot ? 'Bot token' : 'Webhook URL',
                 hintText: widget.isBot
                     ? 'Paste the bot token'
                     : 'https://discord.com/api/webhooks/…',
-                suffixIcon: IconButton(
-                  onPressed: () => setState(() => _obscured = !_obscured),
-                  icon: Icon(
-                    _obscured
-                        ? Icons.visibility_rounded
-                        : Icons.visibility_off_rounded,
-                    size: 20,
-                  ),
-                  tooltip: _obscured ? 'Show' : 'Hide',
-                ),
+                helperText: 'The value stays masked.',
               ),
               validator: widget.isBot
                   ? Validators.botToken
@@ -714,7 +592,6 @@ class _ReplaceSecretDialog extends ConsumerStatefulWidget {
 class _ReplaceSecretDialogState extends ConsumerState<_ReplaceSecretDialog> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final TextEditingController _secretController = TextEditingController();
-  bool _obscured = true;
   bool _saving = false;
 
   @override
@@ -767,23 +644,14 @@ class _ReplaceSecretDialogState extends ConsumerState<_ReplaceSecretDialog> {
             const SizedBox(height: 12),
             TextFormField(
               controller: _secretController,
-              obscureText: _obscured,
+              obscureText: true,
               maxLines: 1,
               autofocus: true,
               decoration: InputDecoration(
                 labelText: widget.isBot
                     ? 'Paste the new token'
                     : 'Paste the new webhook URL',
-                suffixIcon: IconButton(
-                  onPressed: () => setState(() => _obscured = !_obscured),
-                  icon: Icon(
-                    _obscured
-                        ? Icons.visibility_rounded
-                        : Icons.visibility_off_rounded,
-                    size: 20,
-                  ),
-                  tooltip: _obscured ? 'Show' : 'Hide',
-                ),
+                helperText: 'The value stays masked.',
               ),
               validator: widget.isBot
                   ? Validators.botToken
@@ -900,7 +768,6 @@ class _CreateWebhookDialogState extends ConsumerState<_CreateWebhookDialog> {
   _WebhookStep _step = _WebhookStep.configure;
   bool _loading = true;
   bool _busy = false;
-  bool _obscured = true;
   String? _error;
 
   @override
@@ -999,7 +866,9 @@ class _CreateWebhookDialogState extends ConsumerState<_CreateWebhookDialog> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = 'The webhook could not be created: $error';
+        _error =
+            'The webhook could not be created: '
+            '${Security.redactSecrets(error.toString())}';
       });
     }
   }
@@ -1222,26 +1091,17 @@ class _CreateWebhookDialogState extends ConsumerState<_CreateWebhookDialog> {
           const SizedBox(height: 12),
           TextField(
             controller: _tokenController,
-            obscureText: _obscured,
-            decoration: InputDecoration(
+            obscureText: true,
+            decoration: const InputDecoration(
               labelText: 'Paste the webhook token',
-              suffixIcon: IconButton(
-                onPressed: () => setState(() => _obscured = !_obscured),
-                icon: Icon(
-                  _obscured
-                      ? Icons.visibility_rounded
-                      : Icons.visibility_off_rounded,
-                  size: 20,
-                ),
-                tooltip: _obscured ? 'Show' : 'Hide',
-              ),
+              helperText: 'The value stays masked.',
             ),
           ),
           const SizedBox(height: 8),
           Text(
             'The token is shown in Discord under Server settings → '
             'Integrations → the webhook.',
-            style: theme.textTheme.labelSmall,
+            style: theme.textTheme.bodySmall,
           ),
           if (_error != null) ...<Widget>[
             const SizedBox(height: 10),

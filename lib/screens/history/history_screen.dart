@@ -12,6 +12,8 @@ import '../../core/formatters.dart';
 import '../../data/database.dart';
 import '../../data/models.dart';
 import '../../providers/config_providers.dart';
+import '../../services/job_export_service.dart';
+import '../../services/upload_engine.dart';
 import '../../widgets/common.dart';
 
 /// The upload history with search, status filters and log export.
@@ -27,7 +29,11 @@ class HistoryScreen extends ConsumerWidget {
     final List<UploadHistoryEntry> entries =
         historyAsync.value ?? const <UploadHistoryEntry>[];
     final List<UploadHistoryEntry> visible = _applyFilter(entries, filter);
-    final List<_HistoryDay> days = _groupByDay(visible);
+    final int failedInView = visible
+        .where(
+          (UploadHistoryEntry entry) => entry.status == UploadStatus.failedKey,
+        )
+        .length;
 
     return Scaffold(
       appBar: AppBar(
@@ -38,13 +44,27 @@ class HistoryScreen extends ConsumerWidget {
             onPressed: () => ref.invalidate(historyProvider),
             icon: const Icon(Icons.refresh_rounded),
           ),
-          IconButton(
-            tooltip: 'Export log',
-            onPressed: visible.isEmpty
-                ? null
-                : () {
-                    _exportLog(context, visible);
-                  },
+          PopupMenuButton<String>(
+            tooltip: 'Export',
+            enabled: visible.isNotEmpty,
+            onSelected: (String value) {
+              if (value == 'csv') {
+                _exportCsv(context, visible, filter);
+              } else {
+                _exportLog(context, visible);
+              }
+            },
+            itemBuilder: (BuildContext context) =>
+                const <PopupMenuEntry<String>>[
+                  PopupMenuItem<String>(
+                    value: 'csv',
+                    child: Text('Export jobs CSV'),
+                  ),
+                  PopupMenuItem<String>(
+                    value: 'json',
+                    child: Text('Export log as JSON and text'),
+                  ),
+                ],
             icon: const Icon(Icons.ios_share_rounded),
           ),
           IconButton(
@@ -76,6 +96,11 @@ class HistoryScreen extends ConsumerWidget {
               },
             ),
             const SizedBox(height: 6),
+            if (failedInView > 0)
+              _BatchRetryBar(
+                count: failedInView,
+                onRetry: () => _retryFailed(context, ref, failedInView),
+              ),
             Expanded(
               child: historyAsync.isLoading && entries.isEmpty
                   ? const Center(child: CircularProgressIndicator())
@@ -93,9 +118,9 @@ class HistoryScreen extends ConsumerWidget {
                     )
                   : ListView.builder(
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 28),
-                      itemCount: days.length,
+                      itemCount: visible.length,
                       itemBuilder: (BuildContext context, int index) {
-                        return _DaySection(day: days[index]);
+                        return _HistoryRow(entry: visible[index]);
                       },
                     ),
             ),
@@ -120,6 +145,80 @@ class HistoryScreen extends ConsumerWidget {
     ref.invalidate(historyProvider);
     if (!context.mounted) return;
     showAppSnack(context, 'Upload history cleared', isSuccess: true);
+  }
+
+  /// Retries every failed upload of the current filter.
+  Future<void> _retryFailed(
+    BuildContext context,
+    WidgetRef ref,
+    int count,
+  ) async {
+    final List<UploadHistoryEntry> entries =
+        ref.read(historyProvider).value ?? const <UploadHistoryEntry>[];
+    final List<UploadHistoryEntry> failed =
+        _applyFilter(entries, ref.read(_historyFilterProvider))
+            .where(
+              (UploadHistoryEntry entry) =>
+                  entry.status == UploadStatus.failedKey,
+            )
+            .toList();
+
+    if (failed.isEmpty) {
+      if (context.mounted) {
+        showAppSnack(context, 'No failed uploads to retry', isError: true);
+      }
+      return;
+    }
+
+    final UploadEngine engine = UploadEngine.instance;
+    int retried = 0;
+    for (final UploadHistoryEntry entry in failed) {
+      final String? jobId = entry.sessionId;
+      if (jobId == null || jobId.isEmpty) continue;
+      await engine.retryJob(jobId);
+      retried++;
+    }
+
+    ref.invalidate(historyProvider);
+    if (!context.mounted) return;
+    showAppSnack(
+      context,
+      '$retried of $count failed uploads queued for retry',
+      isSuccess: true,
+    );
+  }
+
+  /// Exports the visible history as a CSV file and opens the share sheet.
+  Future<void> _exportCsv(
+    BuildContext context,
+    List<UploadHistoryEntry> entries,
+    _HistoryFilter filter,
+  ) async {
+    try {
+      final String filterLabel = filter.status == _HistoryStatus.all
+          ? 'all'
+          : filter.status.name;
+      final File file = await JobExportService.instance.writeHistoryCsv(
+        entries,
+        name: 'upload-jobs',
+        filter: filterLabel,
+      );
+      if (!context.mounted) return;
+      await SharePlus.instance.share(
+        ShareParams(
+          files: <XFile>[XFile(file.path, mimeType: 'text/csv')],
+          subject: 'Discord Media Sender upload jobs',
+          text: 'Upload jobs exported from Discord Media Sender.',
+        ),
+      );
+    } catch (error) {
+      if (!context.mounted) return;
+      showAppSnack(
+        context,
+        'The jobs could not be exported: $error',
+        isError: true,
+      );
+    }
   }
 
   Future<void> _exportLog(
@@ -159,6 +258,47 @@ class HistoryScreen extends ConsumerWidget {
         isError: true,
       );
     }
+  }
+}
+
+/// The bar that offers a batch retry of the failed uploads in view.
+class _BatchRetryBar extends StatelessWidget {
+  const _BatchRetryBar({required this.count, required this.onRetry});
+
+  final int count;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppConstants.colorError.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: <Widget>[
+            Icon(
+              Icons.error_outline_rounded,
+              size: 16,
+              color: AppConstants.colorError,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text('$count failed', style: theme.textTheme.bodyMedium),
+            ),
+            TextButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.replay_rounded, size: 16),
+              label: const Text('Retry all'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -248,54 +388,6 @@ class _StatusFilterChips extends StatelessWidget {
   }
 }
 
-/// The uploads of a single day.
-class _DaySection extends StatelessWidget {
-  const _DaySection({required this.day});
-
-  final _HistoryDay day;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final String plural = day.entries.length == 1 ? '' : 's';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Padding(
-          padding: const EdgeInsets.fromLTRB(2, 10, 2, 8),
-          child: Row(
-            children: <Widget>[
-              Expanded(
-                child: Text(
-                  _dayLabel(day.date),
-                  style: theme.textTheme.titleSmall,
-                ),
-              ),
-              Text(
-                '${day.entries.length} file$plural · '
-                '${Formatters.bytes(day.totalBytes)}',
-                style: theme.textTheme.labelSmall,
-              ),
-            ],
-          ),
-        ),
-        SectionCard(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-          child: Column(
-            children: <Widget>[
-              for (int i = 0; i < day.entries.length; i++) ...<Widget>[
-                if (i > 0) const Divider(height: 1),
-                _HistoryRow(entry: day.entries[i]),
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 /// A single upload of the history.
 class _HistoryRow extends StatelessWidget {
   const _HistoryRow({required this.entry});
@@ -344,6 +436,16 @@ class _HistoryRow extends StatelessWidget {
                 color: style.color,
                 icon: style.icon,
               ),
+              if (entry.status == UploadStatus.failedKey &&
+                  (entry.sessionId ?? '').isNotEmpty) ...<Widget>[
+                const SizedBox(width: 4),
+                IconButton(
+                  tooltip: 'Retry',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.replay_rounded, size: 18),
+                  onPressed: () => _retryOne(context, entry),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 6),
@@ -387,6 +489,20 @@ class _HistoryRow extends StatelessWidget {
   }
 }
 
+/// Retries a single failed upload.
+Future<void> _retryOne(BuildContext context, UploadHistoryEntry entry) async {
+  final String? jobId = entry.sessionId;
+  if (jobId == null || jobId.isEmpty) {
+    if (context.mounted) {
+      showAppSnack(context, 'This upload cannot be retried', isError: true);
+    }
+    return;
+  }
+  await UploadEngine.instance.retryJob(jobId);
+  if (!context.mounted) return;
+  showAppSnack(context, '${entry.fileName} queued for retry', isSuccess: true);
+}
+
 /// The status filter applied to the visible history.
 enum _HistoryStatus { all, completed, failed, pending }
 
@@ -426,19 +542,6 @@ _historyFilterProvider =
       _HistoryFilterNotifier.new,
     );
 
-/// The uploads of one day.
-class _HistoryDay {
-  const _HistoryDay({required this.date, required this.entries});
-
-  final DateTime date;
-  final List<UploadHistoryEntry> entries;
-
-  int get totalBytes => entries.fold<int>(
-    0,
-    (int sum, UploadHistoryEntry entry) => sum + entry.fileSize,
-  );
-}
-
 /// Applies the search term and the status filter to the history.
 List<UploadHistoryEntry> _applyFilter(
   List<UploadHistoryEntry> entries,
@@ -460,22 +563,6 @@ List<UploadHistoryEntry> _applyFilter(
     };
     return matchesStatus;
   }).toList();
-}
-
-/// Groups the history by the day the uploads were recorded on.
-List<_HistoryDay> _groupByDay(List<UploadHistoryEntry> entries) {
-  final Map<DateTime, List<UploadHistoryEntry>> groups =
-      <DateTime, List<UploadHistoryEntry>>{};
-  for (final UploadHistoryEntry entry in entries) {
-    final DateTime created = entry.createdAt.toLocal();
-    final DateTime day = DateTime(created.year, created.month, created.day);
-    groups.putIfAbsent(day, () => <UploadHistoryEntry>[]).add(entry);
-  }
-  return <_HistoryDay>[
-    for (final MapEntry<DateTime, List<UploadHistoryEntry>> group
-        in groups.entries)
-      _HistoryDay(date: group.key, entries: group.value),
-  ];
 }
 
 /// Builds the JSON representation of the visible history.
@@ -519,19 +606,6 @@ String _historyText(List<UploadHistoryEntry> entries) {
     }
   }
   return buffer.toString();
-}
-
-/// Formats a day as `Today`, `Yesterday` or `yyyy-MM-dd`.
-String _dayLabel(DateTime date) {
-  final DateTime now = DateTime.now();
-  final DateTime today = DateTime(now.year, now.month, now.day);
-  final DateTime target = DateTime(date.year, date.month, date.day);
-  final int difference = today.difference(target).inDays;
-  if (difference == 0) return 'Today';
-  if (difference == 1) return 'Yesterday';
-  final String month = date.month.toString().padLeft(2, '0');
-  final String day = date.day.toString().padLeft(2, '0');
-  return '${date.year}-$month-$day';
 }
 
 /// Formats a timestamp as `yyyy-MM-dd HH:mm`.

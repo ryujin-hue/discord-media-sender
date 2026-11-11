@@ -45,12 +45,16 @@ class AppDatabase {
         onCreate: (Database db, int version) async {
           await _createLegacyTables(db);
           await _createV2Tables(db);
+          await _createV3Tables(db);
         },
         onUpgrade: (Database db, int oldVersion, int newVersion) async {
           if (oldVersion < 2) {
             await _createLegacyTables(db);
             await _createV2Tables(db);
             await _migrateLegacyData(db);
+          }
+          if (oldVersion < 3) {
+            await _createV3Tables(db);
           }
         },
       );
@@ -492,6 +496,42 @@ class AppDatabase {
     }
   }
 
+  /// Tables added by the 2.1 release.
+  ///
+  /// The schema is additive: no existing table is altered, so opening a 2.0
+  /// database never rewrites or drops a row that is already there.
+  static Future<void> _createV3Tables(Database db) async {
+    final List<String> statements = <String>[
+      '''
+      CREATE TABLE IF NOT EXISTS queue_presets (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        destination_ids TEXT NOT NULL DEFAULT '[]',
+        caption_template TEXT,
+        duplicate_policy TEXT NOT NULL DEFAULT 'skip',
+        max_size_mb INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+      ''',
+      'CREATE INDEX IF NOT EXISTS idx_presets_name ON queue_presets(name)',
+      '''
+      CREATE TABLE IF NOT EXISTS destination_quiet_hours (
+        destination_id TEXT PRIMARY KEY,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        start_minute INTEGER NOT NULL DEFAULT 0,
+        end_minute INTEGER NOT NULL DEFAULT 0,
+        strict INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      )
+      ''',
+    ];
+
+    for (final String statement in statements) {
+      await db.execute(statement);
+    }
+  }
+
   /// Copies 1.0 `sessions` / `failures` rows into `upload_history`.
   ///
   /// The legacy tables are intentionally left in place so that a downgrade
@@ -653,6 +693,95 @@ class AppDatabase {
   Future<void> deleteDestination(String id) async {
     final Database db = await database;
     await db.delete('destinations', where: 'id = ?', whereArgs: <Object?>[id]);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Queue presets (2.1)
+  // ---------------------------------------------------------------------------
+
+  /// Every stored preset, ordered by name.
+  Future<List<QueuePreset>> listPresets() async {
+    final Database db = await database;
+    final List<Map<String, Object?>> rows = await db.query(
+      'queue_presets',
+      orderBy: 'name COLLATE NOCASE ASC',
+    );
+    return rows.map(QueuePreset.fromMap).toList();
+  }
+
+  /// A single preset by id.
+  Future<QueuePreset?> presetById(String id) async {
+    final Database db = await database;
+    final List<Map<String, Object?>> rows = await db.query(
+      'queue_presets',
+      where: 'id = ?',
+      whereArgs: <Object?>[id],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return QueuePreset.fromMap(rows.first);
+  }
+
+  /// Stores a preset, replacing an existing one with the same id.
+  Future<void> upsertPreset(QueuePreset preset) async {
+    final Database db = await database;
+    await db.insert(
+      'queue_presets',
+      preset.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Removes a preset.
+  Future<void> deletePreset(String id) async {
+    final Database db = await database;
+    await db.delete('queue_presets', where: 'id = ?', whereArgs: <Object?>[id]);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Quiet hours (2.1)
+  // ---------------------------------------------------------------------------
+
+  /// Every quiet hours entry, keyed by destination id.
+  Future<List<QuietHours>> listQuietHours() async {
+    final Database db = await database;
+    final List<Map<String, Object?>> rows = await db.query(
+      'destination_quiet_hours',
+    );
+    return rows.map(QuietHours.fromMap).toList();
+  }
+
+  /// The quiet hours of one destination, or `null` when it has none.
+  Future<QuietHours?> quietHoursFor(String destinationId) async {
+    final Database db = await database;
+    final List<Map<String, Object?>> rows = await db.query(
+      'destination_quiet_hours',
+      where: 'destination_id = ?',
+      whereArgs: <Object?>[destinationId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return QuietHours.fromMap(rows.first);
+  }
+
+  /// Stores the quiet hours of one destination.
+  Future<void> upsertQuietHours(QuietHours hours) async {
+    final Database db = await database;
+    await db.insert(
+      'destination_quiet_hours',
+      hours.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Removes the quiet hours of one destination.
+  Future<void> deleteQuietHours(String destinationId) async {
+    final Database db = await database;
+    await db.delete(
+      'destination_quiet_hours',
+      where: 'destination_id = ?',
+      whereArgs: <Object?>[destinationId],
+    );
   }
 
   // ---------------------------------------------------------------------------

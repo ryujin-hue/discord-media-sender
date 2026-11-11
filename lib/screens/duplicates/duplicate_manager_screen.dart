@@ -10,11 +10,11 @@ import '../../providers/config_providers.dart';
 import '../../services/duplicate_service.dart';
 import '../../widgets/common.dart';
 
-/// The duplicate manager — reviews every duplicate pair the engine found.
+/// The duplicate manager — reviews every pair the engine found.
 ///
 /// SHA-256 matches are exact; metadata and perceptual matches are only
-/// suggestions. Nothing is ever deleted automatically: the user decides what
-/// happens to every pair.
+/// possible matches and are labelled as such. Nothing is ever deleted
+/// automatically: the user decides what happens to every pair, one by one.
 class DuplicateManagerScreen extends ConsumerWidget {
   const DuplicateManagerScreen({super.key});
 
@@ -79,7 +79,7 @@ class _DuplicateBodyState extends ConsumerState<_DuplicateBody> {
       showAppSnack(
         context,
         'Scanned ${Formatters.count(result.scanned)} files · '
-        '${Formatters.count(result.duplicates.length)} duplicates found',
+        '${Formatters.count(result.duplicates.length)} pairs found',
         isSuccess: true,
       );
     } catch (error) {
@@ -111,6 +111,8 @@ class _DuplicateBodyState extends ConsumerState<_DuplicateBody> {
 
     int pending = 0;
     int skipped = 0;
+    int exact = 0;
+    int possible = 0;
     for (final DuplicateRecord record in records) {
       final String? decision = record.decision;
       if (decision == null ||
@@ -120,20 +122,35 @@ class _DuplicateBodyState extends ConsumerState<_DuplicateBody> {
       } else if (decision == DuplicatePolicy.skip.key) {
         skipped++;
       }
+      if (record.method == DetectionMethod.sha256.key) {
+        exact++;
+      } else {
+        possible++;
+      }
     }
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
       children: <Widget>[
         SectionCard(
-          title: 'Duplicate summary',
-          subtitle: 'Detected pairs and their current state',
+          title: 'Summary',
+          subtitle: '${Formatters.count(records.length)} detected pairs',
           icon: Icons.copy_all_rounded,
           child: Column(
             children: <Widget>[
               MetricRow(
-                label: 'Total duplicates detected',
-                value: Formatters.count(records.length),
+                label: 'Exact matches (SHA-256)',
+                value: Formatters.count(exact),
+                valueColor: exact > 0
+                    ? AppConstants.colorSuccess
+                    : AppConstants.colorTextSecondary,
+              ),
+              MetricRow(
+                label: 'Possible matches',
+                value: Formatters.count(possible),
+                valueColor: possible > 0
+                    ? AppConstants.colorWarning
+                    : AppConstants.colorTextSecondary,
               ),
               MetricRow(
                 label: 'Pending review',
@@ -145,16 +162,14 @@ class _DuplicateBodyState extends ConsumerState<_DuplicateBody> {
               MetricRow(
                 label: 'Files skipped',
                 value: Formatters.count(skipped),
-                valueColor: skipped > 0
-                    ? AppConstants.colorTextSecondary
-                    : AppConstants.colorTextSecondary,
+                valueColor: AppConstants.colorTextSecondary,
               ),
             ],
           ),
         ),
         const SizedBox(height: 14),
         SectionCard(
-          title: 'Rescan library',
+          title: 'Rescan',
           subtitle: _scanning
               ? 'Scanning in progress…'
               : 'Re-hash every file that is already in the library',
@@ -170,11 +185,11 @@ class _DuplicateBodyState extends ConsumerState<_DuplicateBody> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Text(
-                'The scan compares the SHA-256 hash of every library file. '
-                'Files with identical content are reported as duplicates.',
+                'The scan compares the SHA-256 hash of every library file. Only '
+                'identical content is reported as an exact match.',
                 style: theme.textTheme.bodySmall,
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
@@ -184,7 +199,7 @@ class _DuplicateBodyState extends ConsumerState<_DuplicateBody> {
                 ),
               ),
               if (_scanning) ...<Widget>[
-                const SizedBox(height: 14),
+                const SizedBox(height: 12),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: const LinearProgressIndicator(minHeight: 6),
@@ -194,11 +209,9 @@ class _DuplicateBodyState extends ConsumerState<_DuplicateBody> {
           ),
         ),
         const SizedBox(height: 14),
-        const _ExplanationCard(),
-        const SizedBox(height: 14),
         if (records.isEmpty)
           const SizedBox(
-            height: 280,
+            height: 260,
             child: EmptyState(
               icon: Icons.check_circle_outline_rounded,
               title: 'No duplicates found',
@@ -208,92 +221,46 @@ class _DuplicateBodyState extends ConsumerState<_DuplicateBody> {
             ),
           )
         else
-          for (final DuplicateRecord record in records) ...<Widget>[
-            _DuplicateCard(
-              record: record,
-              onReview: (DuplicatePolicy policy) => _review(record, policy),
-              onShowHistory: () =>
-                  _showReviewHistory(context, duplicateId: record.id),
+          SectionCard(
+            title: 'Review list',
+            subtitle:
+                '${Formatters.count(records.length)} pairs · '
+                '${Formatters.count(pending)} pending',
+            icon: Icons.checklist_rounded,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  'A SHA-256 match proves that both files have identical '
+                  'content. Metadata and perceptual-hash matches are possible '
+                  'matches only and are never treated as identical.',
+                  style: theme.textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
+                for (int i = 0; i < records.length; i++) ...<Widget>[
+                  _DuplicateChecklistItem(
+                    record: records[i],
+                    onReview: (DuplicatePolicy policy) =>
+                        _review(records[i], policy),
+                    onShowHistory: () =>
+                        _showReviewHistory(context, duplicateId: records[i].id),
+                  ),
+                  if (i < records.length - 1) const Divider(),
+                ],
+              ],
             ),
-            const SizedBox(height: 12),
-          ],
+          ),
       ],
     );
   }
 }
 
-/// Explains how duplicates are detected and what the engine never does.
-class _ExplanationCard extends StatelessWidget {
-  const _ExplanationCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return const SectionCard(
-      title: 'How duplicates are detected',
-      subtitle: 'What the engine proves and what it only suggests',
-      icon: Icons.info_outline_rounded,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          _NoteLine(
-            icon: Icons.fingerprint_rounded,
-            color: AppConstants.colorSuccess,
-            text:
-                'A SHA-256 match proves that both files have identical '
-                'content — byte for byte.',
-          ),
-          SizedBox(height: 10),
-          _NoteLine(
-            icon: Icons.tune_rounded,
-            color: AppConstants.colorWarning,
-            text:
-                'Metadata and perceptual-hash matches are only suggestions. '
-                'They are never treated as identical and always need your '
-                'review.',
-          ),
-          SizedBox(height: 10),
-          _NoteLine(
-            icon: Icons.shield_rounded,
-            color: AppConstants.colorPrimary,
-            text:
-                'No file is ever deleted automatically — neither the '
-                'duplicate nor the original. Every decision is yours.',
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// A single icon + sentence inside the explanation card.
-class _NoteLine extends StatelessWidget {
-  const _NoteLine({
-    required this.icon,
-    required this.color,
-    required this.text,
-  });
-
-  final IconData icon;
-  final Color color;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Icon(icon, size: 16, color: color),
-        const SizedBox(width: 10),
-        Expanded(child: Text(text, style: theme.textTheme.bodySmall)),
-      ],
-    );
-  }
-}
-
-/// A single duplicate pair with the available review actions.
-class _DuplicateCard extends StatelessWidget {
-  const _DuplicateCard({
+/// A single pair of the review list.
+///
+/// The pair carries the certainty of the detection and the decision that was
+/// taken for it.
+class _DuplicateChecklistItem extends StatelessWidget {
+  const _DuplicateChecklistItem({
     required this.record,
     required this.onReview,
     required this.onShowHistory,
@@ -307,105 +274,102 @@ class _DuplicateCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final DetectionMethod method = DetectionMethod.fromKey(record.method);
+    final bool isExact = method == DetectionMethod.sha256;
+    final DuplicatePolicy? decision = _decisionOf(record);
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                const Icon(
-                  Icons.copy_all_rounded,
-                  size: 18,
-                  color: AppConstants.colorWarning,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Duplicate pair',
-                    style: theme.textTheme.titleSmall,
-                  ),
-                ),
-                StatusPill(
-                  label: method.label,
-                  color: method == DetectionMethod.sha256
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(
+                decision == null
+                    ? Icons.radio_button_unchecked_rounded
+                    : Icons.check_circle_rounded,
+                size: 18,
+                color: decision == null
+                    ? theme.colorScheme.onSurfaceVariant
+                    : AppConstants.colorSuccess,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: StatusPill(
+                  label: isExact
+                      ? 'Identical content · SHA-256'
+                      : 'Possible match · ${method.label}',
+                  color: isExact
                       ? AppConstants.colorSuccess
                       : AppConstants.colorWarning,
+                  icon: isExact
+                      ? Icons.fingerprint_rounded
+                      : Icons.help_outline_rounded,
                 ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            _FileLine(
-              label: 'Original',
-              name: record.originalName ?? 'Unknown file',
-              path: record.originalPath,
-            ),
-            const SizedBox(height: 10),
-            _FileLine(
-              label: 'Duplicate',
-              name: record.duplicateName ?? 'Unknown file',
-              path: record.duplicatePath,
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: <Widget>[
-                Icon(
-                  Icons.schedule_rounded,
-                  size: 13,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 5),
-                Text(
-                  'Detected ${_formatTimestamp(record.detectedAt)}',
-                  style: theme.textTheme.labelSmall,
-                ),
-                const Spacer(),
-                if (record.similarity != null) ...<Widget>[
-                  Icon(
-                    Icons.percent_rounded,
-                    size: 13,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Similarity ${_similarityLabel(record.similarity)}',
-                    style: theme.textTheme.labelSmall,
-                  ),
-                ],
-              ],
-            ),
-            const SizedBox(height: 14),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: <Widget>[
-                OutlinedButton(
-                  onPressed: () => onReview(DuplicatePolicy.skip),
-                  child: const Text('Skip'),
-                ),
-                OutlinedButton(
-                  onPressed: () => onReview(DuplicatePolicy.anyway),
-                  child: const Text('Upload anyway'),
-                ),
-                OutlinedButton(
-                  onPressed: () => onReview(DuplicatePolicy.keepBoth),
-                  child: const Text('Keep both'),
-                ),
-                OutlinedButton(
-                  onPressed: () => onReview(DuplicatePolicy.replace),
-                  child: const Text('Replace entry'),
-                ),
-                TextButton.icon(
-                  onPressed: onShowHistory,
-                  icon: const Icon(Icons.history_rounded, size: 16),
-                  label: const Text('Review history'),
-                ),
-              ],
+              ),
+              const SizedBox(width: 8),
+              if (decision != null)
+                StatusPill(
+                  label: _decisionLabel(decision),
+                  color: AppConstants.colorTextSecondary,
+                )
+              else
+                Text('Pending', style: theme.textTheme.bodySmall),
+            ],
+          ),
+          if (!isExact) ...<Widget>[
+            const SizedBox(height: 6),
+            Text(
+              'The content of the two files is not proven identical.',
+              style: theme.textTheme.bodySmall,
             ),
           ],
-        ),
+          const SizedBox(height: 8),
+          _FileLine(
+            label: 'Original',
+            name: record.originalName ?? 'Unknown file',
+            path: record.originalPath,
+          ),
+          const SizedBox(height: 6),
+          _FileLine(
+            label: isExact ? 'Duplicate' : 'Candidate',
+            name: record.duplicateName ?? 'Unknown file',
+            path: record.duplicatePath,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Detected ${_formatTimestamp(record.detectedAt)}'
+            '${record.similarity == null ? '' : ' · Similarity ${_similarityLabel(record.similarity)}'}',
+            style: theme.textTheme.bodySmall,
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              OutlinedButton(
+                onPressed: () => onReview(DuplicatePolicy.skip),
+                child: const Text('Skip'),
+              ),
+              OutlinedButton(
+                onPressed: () => onReview(DuplicatePolicy.anyway),
+                child: const Text('Upload'),
+              ),
+              OutlinedButton(
+                onPressed: () => onReview(DuplicatePolicy.keepBoth),
+                child: const Text('Keep both'),
+              ),
+              OutlinedButton(
+                onPressed: () => onReview(DuplicatePolicy.replace),
+                child: const Text('Replace entry'),
+              ),
+              TextButton(
+                onPressed: onShowHistory,
+                child: const Text('History'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -431,7 +395,7 @@ class _FileLine extends StatelessWidget {
       children: <Widget>[
         SizedBox(
           width: 74,
-          child: Text(label, style: theme.textTheme.labelSmall),
+          child: Text(label, style: theme.textTheme.bodySmall),
         ),
         const SizedBox(width: 8),
         Expanded(
@@ -447,7 +411,7 @@ class _FileLine extends StatelessWidget {
               if (path != null && path!.isNotEmpty)
                 Text(
                   path!,
-                  style: theme.textTheme.labelSmall,
+                  style: theme.textTheme.bodySmall,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -456,6 +420,30 @@ class _FileLine extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+/// Returns the policy that was decided for the record, if any.
+DuplicatePolicy? _decisionOf(DuplicateRecord record) {
+  final String? decision = record.decision;
+  if (decision == null || decision.isEmpty) return null;
+  if (decision == MediaStatus.pendingReview.key) return null;
+  return DuplicatePolicy.fromKey(decision);
+}
+
+/// A short label for a decided pair.
+String _decisionLabel(DuplicatePolicy policy) {
+  switch (policy) {
+    case DuplicatePolicy.skip:
+      return 'Skipped';
+    case DuplicatePolicy.anyway:
+      return 'Upload';
+    case DuplicatePolicy.keepBoth:
+      return 'Kept both';
+    case DuplicatePolicy.replace:
+      return 'Replaced';
+    case DuplicatePolicy.ask:
+      return 'Asked';
   }
 }
 
@@ -518,7 +506,7 @@ class _ReviewHistorySheet extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Text('Review history', style: theme.textTheme.titleLarge),
+          Text('Review history', style: theme.textTheme.titleMedium),
           const SizedBox(height: 4),
           Text(
             '${Formatters.count(rows.length)} recorded decisions',
@@ -556,7 +544,7 @@ class _HistoryRow extends StatelessWidget {
         Row(
           children: <Widget>[
             Expanded(
-              child: Text(policy.label, style: theme.textTheme.titleSmall),
+              child: Text(policy.label, style: theme.textTheme.bodyMedium),
             ),
             Text(
               _formatTimestamp(
@@ -564,14 +552,14 @@ class _HistoryRow extends StatelessWidget {
                     ? null
                     : DateTime.fromMillisecondsSinceEpoch(reviewedAt),
               ),
-              style: theme.textTheme.labelSmall,
+              style: theme.textTheme.bodySmall,
             ),
           ],
         ),
         const SizedBox(height: 2),
         Text(
           duplicateId,
-          style: theme.textTheme.labelSmall,
+          style: theme.textTheme.bodySmall,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),

@@ -102,3 +102,28 @@ places where the app deliberately does less than the marketing wording might sug
 - **Token validation only proves the token is valid**, not that it has every permission.
   The app verifies the identity with `GET /users/@me` and lists the servers the bot can
   see; a missing permission only shows up when a file is actually sent.
+
+---
+
+## 2.1 additions
+
+- **The bandwidth cap is an average, not a guarantee.** The limiter holds the transfer down
+  to the configured rate over the life of the file. A short burst can still exceed it while
+  the socket buffer fills, and Discord's own rate limits apply on top of it.
+- **Quiet hours are local time.** The window is evaluated against the device clock, so a
+  clock change or a time-zone change moves the window with it. A window that crosses
+  midnight is supported: a start greater than the end wraps around.
+- **A quiet hours window is not a scheduler.** It only decides whether a destination is
+  skipped. It does not wake the app, queue the file for later or hold the transfer open
+  until the window closes.
+- **Safe resume applies to a cold start.** A queue that is interrupted while the app is
+  still running is picked up by the foreground service. The policy only decides what
+  happens when the process itself was killed.
+- **The overlay auto-hide is a local timer.** It is evaluated once per second while the
+  overlay service runs. Dismissing the overlay by hand keeps it hidden until there is work
+  again; it is never cancelled by the overlay.
+- **The widget density is applied on the next refresh.** The Android widget is redrawn by
+  the system, so a density change can take a moment to become visible.
+- **The package id and the version code of a release are checked on the native side.**
+  The update screen shows the gates it can evaluate in Dart and states plainly that the
+  installer re-checks the downloaded APK before it is applied.

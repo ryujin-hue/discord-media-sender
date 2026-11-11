@@ -7,9 +7,15 @@ import '../../data/models.dart';
 import '../../providers/config_providers.dart';
 import '../../providers/upload_providers.dart';
 import '../../services/upload_engine.dart';
+import '../../widgets/brand.dart';
 import '../../widgets/common.dart';
 
 /// The live progress dashboard — the central monitoring screen.
+///
+/// The snapshot stream of the upload engine is the only source of truth here.
+/// The screen shows exactly one monitor and one set of counts; the quick
+/// actions of the 2.0 build were removed because they duplicated the controls
+/// of the monitor.
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
@@ -31,18 +37,14 @@ class HomeScreen extends ConsumerWidget {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
             children: <Widget>[
               const _HomeHeader(),
-              const SizedBox(height: 18),
-              if (snapshot != null && snapshot.jobs.isNotEmpty) ...<Widget>[
-                _LiveMonitorCard(snapshot: snapshot),
-                const SizedBox(height: 14),
-              ],
+              const SizedBox(height: 14),
+              _LiveMonitorCard(snapshot: snapshot),
+              const SizedBox(height: 14),
               const _StatsGrid(),
               const SizedBox(height: 14),
               const _DestinationMonitor(),
               const SizedBox(height: 14),
               _ActivityTimeline(events: events),
-              const SizedBox(height: 14),
-              const _QuickActions(),
             ],
           ),
         ),
@@ -57,51 +59,21 @@ class _HomeHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                'Discord Media Sender',
-                style: theme.textTheme.headlineMedium,
-              ),
-              const SizedBox(height: 2),
-              Text('Live dashboard', style: theme.textTheme.bodySmall),
-            ],
-          ),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: AppConstants.colorPrimary.withValues(alpha: 0.14),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(
-            children: <Widget>[
-              const Icon(
-                Icons.bolt_rounded,
-                size: 14,
-                color: AppConstants.colorPrimary,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                'v${AppConstants.appVersion}',
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: AppConstants.colorPrimary,
-                ),
-              ),
-            ],
-          ),
+        const BrandLockup(size: 36, subtitle: 'Live dashboard'),
+        const SizedBox(height: 8),
+        Text(
+          'Uploads, destinations and activity',
+          style: theme.textTheme.bodySmall,
         ),
       ],
     );
   }
 }
 
+/// The four numbers that describe the queue.
 class _StatsGrid extends ConsumerWidget {
   const _StatsGrid();
 
@@ -120,92 +92,107 @@ class _StatsGrid extends ConsumerWidget {
           bytesTransferred: 0,
         );
 
-    final List<Widget> tiles = <Widget>[
-      StatTile(
-        label: 'Total files',
-        value: Formatters.count(counts.total),
-        icon: Icons.folder_open_rounded,
+    return SectionCard(
+      title: 'Queue counts',
+      icon: Icons.stacked_bar_chart_rounded,
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: _CountCell(
+              label: 'Total',
+              value: Formatters.count(counts.total),
+            ),
+          ),
+          Expanded(
+            child: _CountCell(
+              label: 'Successful',
+              value: Formatters.count(counts.uploaded),
+              color: AppConstants.colorSuccess,
+            ),
+          ),
+          Expanded(
+            child: _CountCell(
+              label: 'Failed',
+              value: Formatters.count(counts.failed),
+              color: AppConstants.colorError,
+            ),
+          ),
+          Expanded(
+            child: _CountCell(
+              label: 'Pending',
+              value: Formatters.count(counts.pending),
+              color: AppConstants.colorWarning,
+            ),
+          ),
+        ],
       ),
-      StatTile(
-        label: 'Uploaded',
-        value: Formatters.count(counts.uploaded),
-        icon: Icons.check_circle_rounded,
-        color: AppConstants.colorSuccess,
-      ),
-      StatTile(
-        label: 'Uploading',
-        value: Formatters.count(counts.uploading),
-        icon: Icons.cloud_upload_rounded,
-        color: AppConstants.colorPrimary,
-      ),
-      StatTile(
-        label: 'Pending queue',
-        value: Formatters.count(counts.pending),
-        icon: Icons.schedule_rounded,
-        color: AppConstants.colorWarning,
-      ),
-      StatTile(
-        label: 'Failed',
-        value: Formatters.count(counts.failed),
-        icon: Icons.error_rounded,
-        color: AppConstants.colorError,
-      ),
-      StatTile(
-        label: 'Duplicates',
-        value: Formatters.count(counts.duplicates),
-        icon: Icons.copy_all_rounded,
-        color: AppConstants.colorWarning,
-      ),
-      StatTile(
-        label: 'Archived',
-        value: Formatters.count(counts.archived),
-        icon: Icons.inventory_2_rounded,
-      ),
-      StatTile(
-        label: 'Data sent',
-        value: Formatters.bytes(counts.bytesTransferred),
-        icon: Icons.data_usage_rounded,
-        color: AppConstants.colorSuccess,
-      ),
-    ];
-
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisSpacing: 12,
-      mainAxisSpacing: 12,
-      childAspectRatio: 1.55,
-      children: tiles,
     );
   }
 }
 
+class _CountCell extends StatelessWidget {
+  const _CountCell({required this.label, required this.value, this.color});
+
+  final String label;
+  final String value;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          value,
+          style: theme.textTheme.titleLarge?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: color,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(label, style: theme.textTheme.labelSmall),
+      ],
+    );
+  }
+}
+
+/// The single upload monitor.
+///
+/// It shows the status, the current file, the progress bar, the speed, the
+/// estimated time left and the three controls.
 class _LiveMonitorCard extends ConsumerWidget {
   const _LiveMonitorCard({required this.snapshot});
 
-  final EngineSnapshot snapshot;
+  final EngineSnapshot? snapshot;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final ThemeData theme = Theme.of(context);
-    final bool paused = snapshot.isPaused;
+    final EngineSnapshot state = snapshot ?? UploadEngine.instance.snapshot;
+    final bool paused = state.isPaused;
+    final bool running = state.isRunning;
+    final bool hasWork = state.jobs.isNotEmpty;
+
+    final String status = paused
+        ? 'Paused'
+        : running
+        ? 'Uploading'
+        : hasWork
+        ? 'Idle'
+        : 'No uploads';
 
     return SectionCard(
-      title: paused ? 'Upload paused' : 'Live upload monitor',
-      subtitle: snapshot.activeDestinationName == null
+      title: 'Upload monitor',
+      subtitle: state.activeDestinationName == null
           ? 'No active destination'
-          : 'Destination: ${snapshot.activeDestinationName}',
+          : 'Destination: ${state.activeDestinationName}',
       icon: paused ? Icons.pause_circle_rounded : Icons.podcasts_rounded,
       trailing: StatusPill(
-        label: paused
-            ? 'Paused'
-            : snapshot.isRunning
-            ? 'Running'
-            : 'Idle',
+        label: status,
         color: paused
             ? AppConstants.colorWarning
-            : snapshot.isRunning
+            : running
             ? AppConstants.colorSuccess
             : AppConstants.colorTextSecondary,
       ),
@@ -215,8 +202,8 @@ class _LiveMonitorCard extends ConsumerWidget {
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: LinearProgressIndicator(
-              value: snapshot.progress,
-              minHeight: 10,
+              value: state.progress,
+              minHeight: 8,
               backgroundColor: theme.colorScheme.outline.withValues(
                 alpha: 0.18,
               ),
@@ -225,63 +212,56 @@ class _LiveMonitorCard extends ConsumerWidget {
               ),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Row(
             children: <Widget>[
               Expanded(
                 child: Text(
-                  snapshot.currentFileName == null
+                  state.currentFileName == null
                       ? 'Waiting for the next file'
-                      : Formatters.fileName(snapshot.currentFileName!),
+                      : Formatters.fileName(state.currentFileName!),
                   style: theme.textTheme.bodyMedium,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
+              const SizedBox(width: 8),
               Text(
-                Formatters.percent(snapshot.progress * 100),
+                Formatters.percent(state.progress * 100),
                 style: theme.textTheme.titleMedium,
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 16,
-            runSpacing: 6,
+          const SizedBox(height: 8),
+          Row(
             children: <Widget>[
-              _MiniMetric(
-                icon: Icons.speed_rounded,
-                label: 'Speed',
-                value:
-                    snapshot.speedBytesPerSecond == null ||
-                        snapshot.speedBytesPerSecond! <= 0
-                    ? '—'
-                    : Formatters.speed(snapshot.speedBytesPerSecond!),
+              Expanded(
+                child: _MiniMetric(
+                  label: 'Speed',
+                  value:
+                      state.speedBytesPerSecond == null ||
+                          state.speedBytesPerSecond! <= 0
+                      ? '—'
+                      : Formatters.speed(state.speedBytesPerSecond!),
+                ),
               ),
-              _MiniMetric(
-                icon: Icons.timer_outlined,
-                label: 'ETA',
-                value: snapshot.etaSeconds == null
-                    ? '—'
-                    : Formatters.duration(snapshot.etaSeconds),
+              Expanded(
+                child: _MiniMetric(
+                  label: 'ETA',
+                  value: state.etaSeconds == null
+                      ? '—'
+                      : Formatters.duration(state.etaSeconds),
+                ),
               ),
-              _MiniMetric(
-                icon: Icons.sentiment_satisfied_alt_rounded,
-                label: 'Done',
-                value: '${snapshot.completedCount}/${snapshot.jobs.length}',
-              ),
-              _MiniMetric(
-                icon: Icons.replay_rounded,
-                label: 'Retries',
-                value: Formatters.count(
-                  snapshot.jobs
-                      .where((DistributionJob j) => j.retryCount > 0)
-                      .length,
+              Expanded(
+                child: _MiniMetric(
+                  label: 'Done',
+                  value: '${state.completedCount}/${state.jobs.length}',
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
           Row(
             children: <Widget>[
               Expanded(
@@ -292,15 +272,19 @@ class _LiveMonitorCard extends ConsumerWidget {
                         label: const Text('Resume'),
                       )
                     : FilledButton.icon(
-                        onPressed: () => UploadEngine.instance.pause(),
+                        onPressed: hasWork
+                            ? () => UploadEngine.instance.pause()
+                            : null,
                         icon: const Icon(Icons.pause_rounded, size: 18),
                         label: const Text('Pause'),
                       ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: () => UploadEngine.instance.cancel(),
+                  onPressed: hasWork
+                      ? () => UploadEngine.instance.cancel()
+                      : null,
                   icon: const Icon(Icons.stop_rounded, size: 18),
                   label: const Text('Cancel'),
                 ),
@@ -314,32 +298,25 @@ class _LiveMonitorCard extends ConsumerWidget {
 }
 
 class _MiniMetric extends StatelessWidget {
-  const _MiniMetric({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
+  const _MiniMetric({required this.label, required this.value});
 
-  final IconData icon;
   final String label;
   final String value;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Icon(icon, size: 14, color: theme.colorScheme.primary),
-        const SizedBox(width: 5),
+        Text(label, style: theme.textTheme.labelSmall),
+        const SizedBox(height: 2),
         Text(
-          label,
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
+          value,
+          style: theme.textTheme.titleSmall,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
-        const SizedBox(width: 4),
-        Text(value, style: theme.textTheme.labelMedium),
       ],
     );
   }
@@ -375,7 +352,7 @@ class _DestinationMonitor extends ConsumerWidget {
         children: <Widget>[
           for (final Destination destination in destinations)
             Padding(
-              padding: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.only(bottom: 8),
               child: Row(
                 children: <Widget>[
                   Icon(
@@ -527,42 +504,5 @@ class _TimelineRow extends StatelessWidget {
     if (difference.inMinutes < 60) return '${difference.inMinutes}m ago';
     if (difference.inHours < 24) return '${difference.inHours}h ago';
     return '${difference.inDays}d ago';
-  }
-}
-
-class _QuickActions extends ConsumerWidget {
-  const _QuickActions();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return SectionCard(
-      title: 'Quick actions',
-      icon: Icons.bolt_rounded,
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: () {
-                UploadEngine.instance.pause();
-                showAppSnack(context, 'Pausing after the current file…');
-              },
-              icon: const Icon(Icons.pause_rounded, size: 18),
-              label: const Text('Pause'),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: () {
-                UploadEngine.instance.resume();
-                showAppSnack(context, 'Upload resumed');
-              },
-              icon: const Icon(Icons.play_arrow_rounded, size: 18),
-              label: const Text('Resume'),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }

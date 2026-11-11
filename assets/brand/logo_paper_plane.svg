@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Origami paper plane">
+  <defs>
+    <style>
+      .plate { fill: #1C2030; }
+      .paper { fill: #F8FAFC; }
+      .fold { fill: #E2E8F0; }
+      .spine { fill: #94A3B8; }
+      .nose { fill: #8B5CF6; }
+      .crease { stroke: #1E293B; stroke-width: 3; stroke-linecap: round; fill: none; }
+      .crease-soft { stroke: #64748B; stroke-width: 2; stroke-linecap: round; fill: none; opacity: 0.85; }
+    </style>
+  </defs>
+  <!-- dark plate -->
+  <circle class="plate" cx="256" cy="256" r="240"/>
+  <!-- rotated origami plane group (approx -16deg) -->
+  <g transform="translate(256,256) rotate(-16) scale(1.05)">
+    <!-- left wing -->
+    <polygon class="paper" points="-88,12  -24,-138  88,3  56,19"/>
+    <!-- right wing -->
+    <polygon class="fold" points="-88,12  -8,122  88,3  56,19"/>
+    <!-- body -->
+    <polygon class="paper" points="-160,0  184,0  56,19  -88,12"/>
+    <!-- spine shadow -->
+    <polygon class="spine" points="-160,0  184,0  176,5  -157,5"/>
+    <!-- nose accent -->
+    <polygon class="nose" points="88,3  184,0  88,-8"/>
+    <!-- creases -->
+    <line class="crease" x1="-160" y1="0" x2="184" y2="0"/>
+    <line class="crease-soft" x1="-88" y1="12" x2="-24" y2="-138"/>
+    <line class="crease-soft" x1="-88" y1="12" x2="-8" y2="122"/>
+  </g>
+</svg>

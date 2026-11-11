@@ -12,7 +12,7 @@ class AppConstants {
   // Identity
   // ---------------------------------------------------------------------------
   static const String appName = 'Discord Media Sender';
-  static const String appVersion = '2.0.0';
+  static const String appVersion = '2.1.0';
   static const String applicationId = 'com.dmsender.discord_media_sender';
 
   /// Official GitHub repository used for update checks and release publishing.
@@ -64,7 +64,7 @@ class AppConstants {
   // Database
   // ---------------------------------------------------------------------------
   static const String databaseName = 'discord_media_sender.db';
-  static const int databaseVersion = 2;
+  static const int databaseVersion = 3;
 
   // ---------------------------------------------------------------------------
   // Secure storage keys (carried over from 1.0 so credentials survive upgrades)
@@ -88,6 +88,26 @@ class AppConstants {
   static const String prefOrientation = 'set_orientation';
   static const String prefUpdateLastCheckMs = 'set_update_last_check_ms';
   static const String prefUpdateSkippedTag = 'set_update_skipped_tag';
+
+  // ---------------------------------------------------------------------------
+  // 2.1 settings
+  // ---------------------------------------------------------------------------
+
+  /// Global bandwidth cap in kilobytes per second. `0` disables the cap.
+  static const String prefBandwidthCapKb = 'set_bandwidth_cap_kb';
+
+  /// How a cold start behaves when pending work exists:
+  /// `off`, `ask` or `auto`.
+  static const String prefSafeResume = 'set_safe_resume';
+
+  /// The density of the home screen widget: `normal` or `compact`.
+  static const String prefWidgetDensity = 'set_widget_density';
+
+  /// Seconds the floating overlay stays hidden while the engine is idle.
+  static const String prefOverlayAutoHide = 'set_overlay_auto_hide';
+
+  /// Whether the floating overlay is enabled at all.
+  static const String prefOverlayEnabled = 'set_overlay_enabled';
 
   // ---------------------------------------------------------------------------
   // Update behaviour
@@ -302,5 +322,39 @@ enum MediaCategory {
   static MediaCategory fromKey(String? key) => MediaCategory.values.firstWhere(
     (c) => c.key == key,
     orElse: () => MediaCategory.other,
+  );
+}
+
+/// How a cold start behaves when the queue still holds pending work.
+///
+/// The 2.0 behaviour was to leave the queue untouched, which meant a killed
+/// upload never continued on its own.
+enum SafeResumePolicy {
+  off('off', 'Never resume automatically'),
+  ask('ask', 'Ask before resuming'),
+  auto('auto', 'Resume automatically');
+
+  const SafeResumePolicy(this.key, this.label);
+
+  final String key;
+  final String label;
+
+  static SafeResumePolicy fromKey(String? key) => SafeResumePolicy.values
+      .firstWhere((p) => p.key == key, orElse: () => SafeResumePolicy.ask);
+}
+
+/// The density of the home screen widget.
+enum WidgetDensity {
+  normal('normal', 'Normal'),
+  compact('compact', 'Compact');
+
+  const WidgetDensity(this.key, this.label);
+
+  final String key;
+  final String label;
+
+  static WidgetDensity fromKey(String? key) => WidgetDensity.values.firstWhere(
+    (d) => d.key == key,
+    orElse: () => WidgetDensity.normal,
   );
 }

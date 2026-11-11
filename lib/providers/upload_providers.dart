@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/constants.dart';
 import '../services/upload_engine.dart';
+import 'config_providers.dart';
 
 /// The live snapshot of the centralised upload engine.
 ///
@@ -96,3 +97,71 @@ class CaptionNotifier extends Notifier<String> {
 
   void set(String value) => state = value;
 }
+
+/// The state of the safe resume prompt.
+///
+/// After a cold start the engine may find work that a killed process left
+/// behind. The [SafeResumePolicy] decides what happens then: nothing, a
+/// prompt, or an automatic restart of the queue.
+class SafeResumeState {
+  const SafeResumeState({this.pendingCount = 0, this.promptVisible = false});
+
+  /// The number of jobs that were pending when the app started.
+  final int pendingCount;
+
+  /// Whether the "continue the upload?" prompt is shown.
+  final bool promptVisible;
+
+  bool get hasPendingWork => pendingCount > 0;
+
+  SafeResumeState copyWith({int? pendingCount, bool? promptVisible}) {
+    return SafeResumeState(
+      pendingCount: pendingCount ?? this.pendingCount,
+      promptVisible: promptVisible ?? this.promptVisible,
+    );
+  }
+}
+
+/// Holds the safe resume state and the actions that act on it.
+class SafeResumeNotifier extends Notifier<SafeResumeState> {
+  @override
+  SafeResumeState build() => const SafeResumeState();
+
+  /// Registers the pending work that a cold start found.
+  ///
+  /// When the policy is [SafeResumePolicy.auto] the queue is restarted right
+  /// away, otherwise the prompt is shown for [SafeResumePolicy.ask].
+  Future<void> registerColdStart(int pendingCount) async {
+    if (pendingCount <= 0) {
+      state = const SafeResumeState();
+      return;
+    }
+    state = state.copyWith(pendingCount: pendingCount);
+    final SafeResumePolicy policy = _policy();
+    if (policy == SafeResumePolicy.auto) {
+      await UploadEngine.instance.resume();
+      state = state.copyWith(promptVisible: false);
+    } else if (policy == SafeResumePolicy.ask) {
+      state = state.copyWith(promptVisible: true);
+    }
+  }
+
+  /// Continues the pending work.
+  Future<void> resumeNow() async {
+    state = state.copyWith(promptVisible: false);
+    await UploadEngine.instance.resume();
+  }
+
+  /// Leaves the pending work in the queue for later.
+  void dismiss() {
+    state = state.copyWith(promptVisible: false);
+  }
+
+  SafeResumePolicy _policy() => ref.read(settingsProvider).safeResume;
+}
+
+/// The safe resume state.
+final NotifierProvider<SafeResumeNotifier, SafeResumeState> safeResumeProvider =
+    NotifierProvider<SafeResumeNotifier, SafeResumeState>(
+      SafeResumeNotifier.new,
+    );

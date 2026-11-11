@@ -6,6 +6,7 @@ import 'package:open_filex/open_filex.dart';
 
 import '../../core/constants.dart';
 import '../../core/formatters.dart';
+import '../../core/security.dart';
 import '../../data/models.dart';
 import '../../providers/config_providers.dart';
 import '../../services/analytics_service.dart';
@@ -26,15 +27,23 @@ class AnalyticsScreen extends ConsumerStatefulWidget {
 
 /// The export formats offered by the analytics centre.
 enum _ExportFormat {
-  csv('CSV', Icons.table_chart_rounded),
-  json('JSON', Icons.data_object_rounded),
-  pdf('PDF', Icons.picture_as_pdf_rounded);
+  csv('CSV'),
+  json('JSON'),
+  pdf('PDF');
 
-  const _ExportFormat(this.label, this.icon);
+  const _ExportFormat(this.label);
 
   final String label;
-  final IconData icon;
 }
+
+/// The patterns that reveal a credential inside an exported file.
+final RegExp _webhookUrlPattern = RegExp(
+  r"https?://[^\s'<>]*(?:discord(?:app)?\.com|discord\.com)/api/webhooks/[^\s'<>]*",
+  caseSensitive: false,
+);
+
+/// The pattern of a bot token that is sent as an authorization header.
+final RegExp _botTokenPattern = RegExp(r'\bBot\s+[A-Za-z0-9_\-\.]{20,}');
 
 class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
   AnalyticsRange _range = AnalyticsRange.day7;
@@ -105,9 +114,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
           children: <Widget>[
-            _buildRangeSelector(),
-            const SizedBox(height: 14),
-            _buildDestinationFilter(destinations),
+            _buildFilters(destinations),
             const SizedBox(height: 14),
             ..._buildContent(),
           ],
@@ -140,8 +147,8 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
 
     if (summary.totalFiles == 0) {
       return <Widget>[
-        SizedBox(
-          height: 320,
+        const SizedBox(
+          height: 280,
           child: EmptyState(
             icon: Icons.insights_rounded,
             title: 'No activity recorded',
@@ -156,7 +163,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
     }
 
     return <Widget>[
-      _buildStatGrid(summary),
+      _buildKeyFigures(summary),
       const SizedBox(height: 14),
       _buildActivityChart(summary),
       const SizedBox(height: 14),
@@ -174,131 +181,126 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
     ];
   }
 
-  Widget _buildRangeSelector() {
+  /// The range and the destination filter of the report.
+  Widget _buildFilters(List<Destination> destinations) {
     return SectionCard(
-      title: 'Time range',
+      title: 'Filters',
       subtitle: _range.label,
-      icon: Icons.date_range_rounded,
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: <Widget>[
-          for (final AnalyticsRange range in AnalyticsRange.values)
-            FilterChip(
-              label: Text(range.label),
-              selected: _range == range,
-              showCheckmark: false,
-              onSelected: (bool selected) {
-                if (selected) _selectRange(range);
-              },
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDestinationFilter(List<Destination> destinations) {
-    return SectionCard(
-      title: 'Destination filter',
-      subtitle: 'Limit the report to a single Discord destination',
       icon: Icons.filter_alt_rounded,
-      child: DropdownButtonFormField<String?>(
-        initialValue: _destinationId,
-        isExpanded: true,
-        hint: const Text('All destinations'),
-        decoration: const InputDecoration(labelText: 'Destination'),
-        items: <DropdownMenuItem<String?>>[
-          const DropdownMenuItem<String?>(
-            value: null,
-            child: Text('All destinations'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              for (final AnalyticsRange range in AnalyticsRange.values)
+                FilterChip(
+                  label: Text(range.label),
+                  selected: _range == range,
+                  showCheckmark: false,
+                  onSelected: (bool selected) {
+                    if (selected) _selectRange(range);
+                  },
+                ),
+            ],
           ),
-          for (final Destination destination in destinations)
-            DropdownMenuItem<String?>(
-              value: destination.id,
-              child: Text(destination.name, overflow: TextOverflow.ellipsis),
-            ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String?>(
+            initialValue: _destinationId,
+            isExpanded: true,
+            hint: const Text('All destinations'),
+            decoration: const InputDecoration(labelText: 'Destination'),
+            items: <DropdownMenuItem<String?>>[
+              const DropdownMenuItem<String?>(
+                value: null,
+                child: Text('All destinations'),
+              ),
+              for (final Destination destination in destinations)
+                DropdownMenuItem<String?>(
+                  value: destination.id,
+                  child: Text(
+                    destination.name,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+            onChanged: _loading ? null : _selectDestination,
+          ),
         ],
-        onChanged: _loading ? null : _selectDestination,
       ),
     );
   }
 
-  Widget _buildStatGrid(AnalyticsSummary summary) {
-    final List<Widget> tiles = <Widget>[
-      StatTile(
-        label: 'Total files processed',
-        value: Formatters.count(summary.totalFiles),
-        icon: Icons.folder_open_rounded,
-      ),
-      StatTile(
-        label: 'Successful uploads',
-        value: Formatters.count(summary.successfulUploads),
-        icon: Icons.check_circle_rounded,
-        color: AppConstants.colorSuccess,
-      ),
-      StatTile(
-        label: 'Failed uploads',
-        value: Formatters.count(summary.failedUploads),
-        icon: Icons.error_rounded,
-        color: AppConstants.colorError,
-      ),
-      StatTile(
-        label: 'Pending uploads',
-        value: Formatters.count(summary.pendingUploads),
-        icon: Icons.schedule_rounded,
-        color: AppConstants.colorWarning,
-      ),
-      StatTile(
-        label: 'Total data transferred',
-        value: Formatters.bytes(summary.totalBytesTransferred),
-        icon: Icons.data_usage_rounded,
-        color: AppConstants.colorSuccess,
-      ),
-      StatTile(
-        label: 'Duplicate files detected',
-        value: Formatters.count(summary.duplicatesDetected),
-        icon: Icons.copy_all_rounded,
-        color: AppConstants.colorWarning,
-      ),
-      StatTile(
-        label: 'Archived files',
-        value: Formatters.count(summary.archivedFiles),
-        icon: Icons.inventory_2_rounded,
-      ),
-      StatTile(
-        label: 'Active Discord destinations',
-        value: Formatters.count(summary.activeDestinations),
-        icon: Icons.hub_rounded,
-        color: AppConstants.colorPrimary,
-      ),
-      StatTile(
-        label: 'Success rate',
-        value: Formatters.percent(summary.successRate),
-        icon: Icons.percent_rounded,
-        color: AppConstants.colorSuccess,
-      ),
-      StatTile(
-        label: 'Average upload time',
-        value: summary.averageUploadSeconds == null
-            ? '—'
-            : Formatters.duration(summary.averageUploadSeconds!.round()),
-        icon: Icons.timer_outlined,
-        color: AppConstants.colorPrimary,
-      ),
-    ];
-
+  /// The headline numbers of the report.
+  Widget _buildKeyFigures(AnalyticsSummary summary) {
     return SectionCard(
-      title: 'Overview',
-      subtitle: _range.label,
+      title: 'Key figures',
       icon: Icons.insights_rounded,
-      child: GridView.count(
-        crossAxisCount: 2,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-        childAspectRatio: 1.55,
-        children: tiles,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            childAspectRatio: 1.55,
+            children: <Widget>[
+              StatTile(
+                label: 'Files processed',
+                value: Formatters.count(summary.totalFiles),
+                icon: Icons.folder_open_rounded,
+              ),
+              StatTile(
+                label: 'Successful uploads',
+                value: Formatters.count(summary.successfulUploads),
+                icon: Icons.check_circle_rounded,
+                color: AppConstants.colorSuccess,
+              ),
+              StatTile(
+                label: 'Failed uploads',
+                value: Formatters.count(summary.failedUploads),
+                icon: Icons.error_rounded,
+                color: AppConstants.colorError,
+              ),
+              StatTile(
+                label: 'Pending uploads',
+                value: Formatters.count(summary.pendingUploads),
+                icon: Icons.schedule_rounded,
+                color: AppConstants.colorWarning,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          MetricRow(
+            label: 'Data transferred',
+            value: Formatters.bytes(summary.totalBytesTransferred),
+          ),
+          MetricRow(
+            label: 'Success rate',
+            value: Formatters.percent(summary.successRate),
+          ),
+          MetricRow(
+            label: 'Average upload time',
+            value: summary.averageUploadSeconds == null
+                ? '—'
+                : Formatters.duration(summary.averageUploadSeconds!.round()),
+          ),
+          MetricRow(
+            label: 'Duplicate files detected',
+            value: Formatters.count(summary.duplicatesDetected),
+          ),
+          MetricRow(
+            label: 'Archived files',
+            value: Formatters.count(summary.archivedFiles),
+          ),
+          MetricRow(
+            label: 'Active destinations',
+            value: Formatters.count(summary.activeDestinations),
+          ),
+        ],
       ),
     );
   }
@@ -348,22 +350,6 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
                   label: 'Failed',
                   value: Formatters.count(summary.failedUploads),
                   valueColor: AppConstants.colorError,
-                ),
-                MetricRow(
-                  label: 'Success rate',
-                  value: Formatters.percent(summary.successRate),
-                ),
-                MetricRow(
-                  label: 'Average upload time',
-                  value: summary.averageUploadSeconds == null
-                      ? '—'
-                      : Formatters.duration(
-                          summary.averageUploadSeconds!.round(),
-                        ),
-                ),
-                MetricRow(
-                  label: 'Data transferred',
-                  value: Formatters.bytes(summary.totalBytesTransferred),
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -422,7 +408,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
               in summary.destinationPerformance) ...<Widget>[
             Text(
               destination.name,
-              style: theme.textTheme.titleSmall,
+              style: theme.textTheme.bodyMedium,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -478,27 +464,23 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          MetricRow(
-            label: 'Duplicates detected',
-            value: Formatters.count(summary.duplicatesDetected),
-          ),
           if (byMethod.isEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                'No duplicate was detected with a specific method in this range.',
-                style: theme.textTheme.bodySmall,
-              ),
+            Text(
+              'No duplicate was detected with a specific method in this range.',
+              style: theme.textTheme.bodySmall,
             )
           else ...<Widget>[
-            const SizedBox(height: 6),
-            Text('Detection method', style: theme.textTheme.titleSmall),
-            const SizedBox(height: 4),
             for (final MapEntry<String, int> entry in byMethod.entries)
               MetricRow(
                 label: DetectionMethod.fromKey(entry.key).label,
                 value: Formatters.count(entry.value),
               ),
+            const SizedBox(height: 6),
+            Text(
+              'SHA-256 is an exact match. Metadata and perceptual hash are '
+              'possible matches.',
+              style: theme.textTheme.bodySmall,
+            ),
           ],
         ],
       ),
@@ -527,11 +509,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           MetricRow(
-            label: 'Archived files',
-            value: Formatters.count(summary.archivedFiles),
-          ),
-          MetricRow(
-            label: 'Total archive storage',
+            label: 'Archive storage',
             value: Formatters.bytes(archiveBytes),
           ),
         ],
@@ -553,30 +531,17 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
             runSpacing: 10,
             children: <Widget>[
               for (final _ExportFormat format in _ExportFormat.values)
-                OutlinedButton.icon(
+                OutlinedButton(
                   onPressed: _exporting ? null : () => _export(summary, format),
-                  icon: Icon(format.icon, size: 18),
-                  label: Text(format.label),
+                  child: Text(format.label),
                 ),
             ],
           ),
           const SizedBox(height: 12),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Icon(
-                Icons.shield_outlined,
-                size: 16,
-                color: theme.colorScheme.primary,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Exports never contain bot tokens, webhook URLs or API keys.',
-                  style: theme.textTheme.bodySmall,
-                ),
-              ),
-            ],
+          Text(
+            'Metrics and destination names only. An export that contains a '
+            'token or a webhook URL is discarded instead of being offered.',
+            style: theme.textTheme.bodySmall,
           ),
         ],
       ),
@@ -584,7 +549,20 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
   }
 
   /// Writes the report to a file and offers to open it.
+  ///
+  /// The report is checked before and after it is written: a report that
+  /// carries a credential never reaches the user.
   Future<void> _export(AnalyticsSummary summary, _ExportFormat format) async {
+    if (_summaryHoldsSecret(summary)) {
+      showAppSnack(
+        context,
+        'The export was cancelled: a destination name contains a token or a '
+        'webhook URL.',
+        isError: true,
+      );
+      return;
+    }
+
     setState(() => _exporting = true);
     try {
       final File file;
@@ -599,14 +577,59 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
           file = await AnalyticsService.instance.exportPdf(summary);
           break;
       }
+      if (format != _ExportFormat.pdf && await _fileHoldsSecret(file)) {
+        await file.delete();
+        if (!mounted) return;
+        showAppSnack(
+          context,
+          'The export file was deleted: it contained a token or a webhook URL.',
+          isError: true,
+        );
+        return;
+      }
       if (!mounted) return;
       await _showExportResult(file);
     } catch (error) {
       if (!mounted) return;
-      showAppSnack(context, 'Export failed: $error', isError: true);
+      showAppSnack(
+        context,
+        'Export failed: ${Security.redactSecrets(error.toString())}',
+        isError: true,
+      );
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
+  }
+
+  /// Checks whether the report holds a credential.
+  ///
+  /// The report is built from the destination names, so a name that contains
+  /// a webhook URL would end up in the file.
+  bool _summaryHoldsSecret(AnalyticsSummary summary) {
+    for (final DestinationPerformance destination
+        in summary.destinationPerformance) {
+      if (_holdsSecret(destination.name)) return true;
+      if (_holdsSecret(destination.destinationId)) return true;
+    }
+    return false;
+  }
+
+  /// Checks whether the written file holds a credential.
+  ///
+  /// The PDF export compresses its pages, so only the readable formats are
+  /// checked here; the PDF is covered by the check of the report itself, which
+  /// runs before the file is written.
+  Future<bool> _fileHoldsSecret(File file) async {
+    final List<int> bytes = await file.readAsBytes();
+    return _holdsSecret(String.fromCharCodes(bytes));
+  }
+
+  /// Returns true when the text holds something that looks like a credential.
+  bool _holdsSecret(String content) {
+    if (content.isEmpty) return false;
+    if (_webhookUrlPattern.hasMatch(content)) return true;
+    if (_botTokenPattern.hasMatch(content)) return true;
+    return Security.redactSecrets(content) != content;
   }
 
   /// Shows the path of the generated export and lets the user open it.
@@ -629,7 +652,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
               SelectableText(file.path, style: theme.textTheme.bodySmall),
               const SizedBox(height: 12),
               Text(
-                'Exports never contain bot tokens, webhook URLs or API keys.',
+                'The report was checked: it holds no token and no webhook URL.',
                 style: theme.textTheme.bodySmall,
               ),
             ],

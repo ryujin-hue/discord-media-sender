@@ -340,3 +340,48 @@ The 1.0 flat keys `cfg_bot_token`, `cfg_webhook_url`, `cfg_bot_name`, `cfg_avata
 `cfg_channel_id`, `cfg_channel_name` and `cfg_mode` are migrated into the
 `legacy_default` profile on the first launch of 2.0 and then deleted, so there is exactly
 one storage mechanism.
+
+---
+
+## 2.1 additions (schema version 3)
+
+The 2.1 schema is **additive**: no table of 2.0 is altered, so opening a 2.0 database never
+rewrites or drops a row that is already there.
+
+### `queue_presets`
+
+| Column | Type | |
+|---|---|---|
+| `id` | TEXT | Primary key |
+| `name` | TEXT | Display name |
+| `destination_ids` | TEXT | JSON array of destination ids |
+| `caption_template` | TEXT | Optional, may contain `{name}`, `{size}`, `{index}` |
+| `duplicate_policy` | TEXT | `skip`, `ask`, `anyway`, `replace`, `keep_both` |
+| `max_size_mb` | INTEGER | `0` means no limit |
+| `created_at` | INTEGER | |
+| `updated_at` | INTEGER | |
+
+A preset never stores a credential, so it can be exported safely.
+
+### `destination_quiet_hours`
+
+| Column | Type | |
+|---|---|---|
+| `destination_id` | TEXT | Primary key, matches `destinations.id` |
+| `enabled` | INTEGER | 0/1 |
+| `start_minute` | INTEGER | Minutes after local midnight |
+| `end_minute` | INTEGER | Minutes after local midnight |
+| `strict` | INTEGER | 0/1, also blocks a manual upload |
+| `updated_at` | INTEGER | |
+
+A window whose start is greater than its end wraps around midnight.
+
+### New settings in `app_settings`
+
+| Key | Meaning |
+|---|---|
+| `set_bandwidth_cap_kb` | Global cap in KB/s, `0` disables it |
+| `set_safe_resume` | `off`, `ask` or `auto` |
+| `set_widget_density` | `normal` or `compact` |
+| `set_overlay_auto_hide` | Seconds the overlay stays hidden while idle, `0` keeps it visible |
+| `set_overlay_enabled` | Whether the floating overlay is enabled |

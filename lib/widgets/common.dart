@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/constants.dart';
 import '../core/formatters.dart';
+import '../services/widget_bridge.dart';
 
 /// A rounded card used for every grouped block of content.
 class SectionCard extends StatelessWidget {
@@ -376,40 +377,87 @@ class _LoadingSkeletonState extends State<LoadingSkeleton>
   }
 }
 
-/// A labelled key/value row.
+/// A label / value row with a fixed label column.
+///
+/// The label gets a fixed width so that a long label can never squeeze the
+/// value into a one-character-per-line column on a narrow screen.
 class MetricRow extends StatelessWidget {
   const MetricRow({
     super.key,
     required this.label,
     required this.value,
     this.valueColor,
+    this.onTap,
+    this.valueTrailing,
   });
+
+  /// The width of the label column.
+  static const double labelWidth = 112;
 
   final String label;
   final String value;
   final Color? valueColor;
 
+  /// Makes the row tappable, for example to open a link.
+  final VoidCallback? onTap;
+
+  /// An optional widget placed after the value, such as a copy button.
+  final Widget? valueTrailing;
+
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    return Padding(
+    final Widget content = Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: <Widget>[
-          Expanded(child: Text(label, style: theme.textTheme.bodyMedium)),
-          const SizedBox(width: 12),
-          Text(
-            value,
-            style: theme.textTheme.bodyLarge?.copyWith(
-              fontWeight: FontWeight.w600,
-              color: valueColor,
+          SizedBox(
+            width: MetricRow.labelWidth,
+            child: Text(
+              label,
+              style: theme.textTheme.bodyMedium,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-            textAlign: TextAlign.right,
           ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              value,
+              style: theme.textTheme.bodyLarge?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: valueColor,
+              ),
+              textAlign: TextAlign.right,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (valueTrailing != null) ...<Widget>[
+            const SizedBox(width: 6),
+            valueTrailing!,
+          ],
         ],
       ),
     );
+
+    if (onTap == null) return content;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: content,
+    );
+  }
+}
+
+/// Opens a URL in the browser.
+///
+/// The platform side handles the intent, so no extra plugin is needed.
+Future<void> openUrl(BuildContext context, String url) async {
+  final bool opened = await WidgetBridge.instance.openUrl(url);
+  if (!opened && context.mounted) {
+    showAppSnack(context, 'Could not open $url', isError: true);
   }
 }
 

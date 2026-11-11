@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/constants.dart';
 import '../core/formatters.dart';
 import '../providers/config_providers.dart';
+import '../widgets/brand.dart';
 
 /// The first-run wizard that introduces the app and collects the minimum
 /// configuration needed to start sending.
@@ -70,6 +71,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       body: SafeArea(
         child: Column(
           children: <Widget>[
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+              child: BrandLockup(size: 34, title: 'Discord Media Sender'),
+            ),
             Expanded(
               child: PageView.builder(
                 controller: _controller,

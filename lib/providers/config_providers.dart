@@ -17,6 +17,11 @@ class AppSettings {
     this.autoUpdate = true,
     this.batteryAsked = false,
     this.releaseChannel = 'stable',
+    this.bandwidthCapKb = 0,
+    this.safeResume = SafeResumePolicy.ask,
+    this.widgetDensity = WidgetDensity.normal,
+    this.overlayAutoHideSeconds = 0,
+    this.overlayEnabled = false,
   });
 
   final ThemeMode themeMode;
@@ -26,6 +31,23 @@ class AppSettings {
   final bool batteryAsked;
   final String releaseChannel;
 
+  /// The global bandwidth cap in kilobytes per second. `0` disables it.
+  final int bandwidthCapKb;
+
+  /// How a cold start behaves when the queue still holds pending work.
+  final SafeResumePolicy safeResume;
+
+  /// The density of the home screen widget.
+  final WidgetDensity widgetDensity;
+
+  /// Seconds the floating overlay stays hidden while the engine is idle.
+  ///
+  /// `0` keeps the overlay visible.
+  final int overlayAutoHideSeconds;
+
+  /// Whether the floating overlay is enabled.
+  final bool overlayEnabled;
+
   AppSettings copyWith({
     ThemeMode? themeMode,
     bool? onboardingDone,
@@ -33,6 +55,11 @@ class AppSettings {
     bool? autoUpdate,
     bool? batteryAsked,
     String? releaseChannel,
+    int? bandwidthCapKb,
+    SafeResumePolicy? safeResume,
+    WidgetDensity? widgetDensity,
+    int? overlayAutoHideSeconds,
+    bool? overlayEnabled,
   }) {
     return AppSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -41,6 +68,12 @@ class AppSettings {
       autoUpdate: autoUpdate ?? this.autoUpdate,
       batteryAsked: batteryAsked ?? this.batteryAsked,
       releaseChannel: releaseChannel ?? this.releaseChannel,
+      bandwidthCapKb: bandwidthCapKb ?? this.bandwidthCapKb,
+      safeResume: safeResume ?? this.safeResume,
+      widgetDensity: widgetDensity ?? this.widgetDensity,
+      overlayAutoHideSeconds:
+          overlayAutoHideSeconds ?? this.overlayAutoHideSeconds,
+      overlayEnabled: overlayEnabled ?? this.overlayEnabled,
     );
   }
 }
@@ -73,6 +106,16 @@ class SettingsNotifier extends Notifier<AppSettings> {
       autoUpdate: prefs.getBool(AppConstants.prefAutoUpdate) ?? true,
       batteryAsked: prefs.getBool(AppConstants.prefBatteryAsked) ?? false,
       releaseChannel: prefs.getString('set_release_channel') ?? 'stable',
+      bandwidthCapKb: prefs.getInt(AppConstants.prefBandwidthCapKb) ?? 0,
+      safeResume: SafeResumePolicy.fromKey(
+        prefs.getString(AppConstants.prefSafeResume),
+      ),
+      widgetDensity: WidgetDensity.fromKey(
+        prefs.getString(AppConstants.prefWidgetDensity),
+      ),
+      overlayAutoHideSeconds:
+          prefs.getInt(AppConstants.prefOverlayAutoHide) ?? 0,
+      overlayEnabled: prefs.getBool(AppConstants.prefOverlayEnabled) ?? false,
     );
   }
 
@@ -133,6 +176,54 @@ class SettingsNotifier extends Notifier<AppSettings> {
         _prefs ?? await SharedPreferences.getInstance();
     _prefs = prefs;
     await prefs.setString('set_release_channel', channel);
+  }
+
+  /// Sets the global bandwidth cap in kilobytes per second.
+  Future<void> setBandwidthCapKb(int value) async {
+    state = state.copyWith(bandwidthCapKb: value.clamp(0, 1024 * 1024));
+    final SharedPreferences prefs =
+        _prefs ?? await SharedPreferences.getInstance();
+    _prefs = prefs;
+    await prefs.setInt(
+      AppConstants.prefBandwidthCapKb,
+      value.clamp(0, 1024 * 1024),
+    );
+  }
+
+  /// Sets how a cold start behaves when pending work exists.
+  Future<void> setSafeResume(SafeResumePolicy policy) async {
+    state = state.copyWith(safeResume: policy);
+    final SharedPreferences prefs =
+        _prefs ?? await SharedPreferences.getInstance();
+    _prefs = prefs;
+    await prefs.setString(AppConstants.prefSafeResume, policy.key);
+  }
+
+  /// Sets the density of the home screen widget.
+  Future<void> setWidgetDensity(WidgetDensity density) async {
+    state = state.copyWith(widgetDensity: density);
+    final SharedPreferences prefs =
+        _prefs ?? await SharedPreferences.getInstance();
+    _prefs = prefs;
+    await prefs.setString(AppConstants.prefWidgetDensity, density.key);
+  }
+
+  /// Sets how long the floating overlay stays hidden while the engine is idle.
+  Future<void> setOverlayAutoHideSeconds(int value) async {
+    state = state.copyWith(overlayAutoHideSeconds: value.clamp(0, 3600));
+    final SharedPreferences prefs =
+        _prefs ?? await SharedPreferences.getInstance();
+    _prefs = prefs;
+    await prefs.setInt(AppConstants.prefOverlayAutoHide, value.clamp(0, 3600));
+  }
+
+  /// Enables or disables the floating overlay.
+  Future<void> setOverlayEnabled(bool value) async {
+    state = state.copyWith(overlayEnabled: value);
+    final SharedPreferences prefs =
+        _prefs ?? await SharedPreferences.getInstance();
+    _prefs = prefs;
+    await prefs.setBool(AppConstants.prefOverlayEnabled, value);
   }
 }
 
