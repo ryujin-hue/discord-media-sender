@@ -211,7 +211,7 @@ jobs:
 
             Application id: `com.dmsender.discord_media_sender`
 
-            Verify the download before installing:
+            Download `SHA256SUMS.txt` and verify the APK before installing it:
 
             ```
             sha256sum -c SHA256SUMS.txt
@@ -220,8 +220,31 @@ jobs:
             The APK is signed with the persistent release key, so it installs
             over an existing installation without losing any user data.
 
-            Download `SHA256SUMS.txt` and verify the APK before installing it:
+            ### 2.1.0
 
-            ```
-            sha256sum -c SHA256SUMS.txt
-            ```
+            **Fixed**
+
+            * The foreground service now starts together with the queue, and a
+              queue that a killed process left behind is picked up again.
+            * Resume works after a process death; it is no longer a no-op.
+            * The widget "start" command runs the pending work.
+            * The ETA is the average since the start of the job, so it stays
+              stable on a steady transfer.
+            * The About labels stay horizontal on a 360 dp screen.
+
+            **New**
+
+            * Queue presets: destinations, caption template, duplicate policy
+              and maximum file size in one tap.
+            * A global bandwidth cap in KB/s.
+            * Quiet hours per destination, honoured by the automatic upload.
+            * Batch retry of the failed uploads of the current filter.
+            * Export of the upload jobs as a redacted CSV.
+            * A configurable widget density.
+            * A safe resume policy for a cold start with pending work.
+            * An overlay that auto-hides while the engine is idle.
+
+            **Brand**
+
+            * The origami paper plane is the new launcher icon, launch screen
+              and About mark.
