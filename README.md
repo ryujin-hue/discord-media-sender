@@ -42,6 +42,7 @@ management and a live progress dashboard — all driven by a single centralised 
 | **Flutter** | 3.47.9 stable · Dart 3.13.7 |
 | **Discord API** | REST v10 |
 | **Repository** | [`ryujin-hue/discord-media-sender`](https://github.com/ryujin-hue/discord-media-sender) |
+| **Licence** | MIT — see [Licence](#licence) |
 
 </td>
 </tr>
@@ -54,7 +55,7 @@ management and a live progress dashboard — all driven by a single centralised 
 - [Quick start](#quick-start)
 - [What changed in 2.1.1](#what-changed-in-211)
 - [What changed in 2.1](#what-changed-in-21)
-- [What changed since 1.0](#what-changed-since-10)
+- [Migration and mapping](#migration-and-mapping)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Background uploads](#background-uploads)
@@ -140,23 +141,72 @@ the onboarding. The four variants live in `assets/brand/`, the rules in
 
 ---
 
-## What changed since 1.0
+## Migration and mapping
 
 The 1.0.a9 build was a Flutter application with a working upload engine, a `sessions` /
 `session_files` / `failures` database, secure credential storage and GitHub-based update
-checking. **2.x keeps all of that and rebuilds around it:**
+checking. **2.x keeps all of that and rebuilds around it.** Nothing has to be re-entered, and
+nothing is thrown away: the legacy tables are still written, so a downgrade still finds them.
 
-- The **application id, label, minimum SDK and database name are unchanged**, so an APK
-  built from this source installs over 1.0 without losing data.
-- The 1.0 `sessions`, `session_files` and `failures` tables are **kept and migrated** into
-  the new unified `upload_history` table on first launch.
-- The 1.0 secure-store keys (`cfg_bot_token`, `cfg_webhook_url`, …) are **migrated into a
-  named credential profile** on first launch, so no credential has to be re-entered.
-- The 1.0 upload behaviour (batching, `retry_after` handling, pause-after-batch, a 6 hour
-  update check interval, the ZIP 5 GB limit) is preserved.
+### Data — `discord_media_sender.db`
+
+| 1.0 | 2.1 | What happens on the first launch |
+|:---|:---|:---|
+| `sessions` | `upload_history` (`migrated_from = 'sessions'`) | Every session row becomes a history entry with the file count, the byte count and the outcome. |
+| `session_files` | `upload_history` (`migrated_from = 'session_files'`) | Every file row becomes a history entry with its name and size. |
+| `failures` | `upload_history` (`migrated_from = 'failures'`) | Every failure row becomes a history entry with its HTTP code, Discord code and message. |
+| — | `distribution_jobs` | The persistent queue: one row per file per destination, with its status, retry counter and heartbeat. |
+| — | `delivery_records` | SHA-256 per destination. The base of the anti-duplication system. |
+| — | `destinations`, `credential_profiles` | The webhook and bot targets, with their own queues and counters. |
+| — | `media_library`, `media_collections` | The local gallery and its collections. |
+| — | `queue_presets`, `destination_quiet_hours` | Added in 2.1. |
+
+The three legacy tables are **kept as they are**. The migration only copies out of them.
+
+### Credentials — Android Keystore
+
+| 1.0 key | 2.1 home |
+|:---|:---|
+| `cfg_bot_token` | credential profile `legacy_default` → `botToken` |
+| `cfg_webhook_url` | credential profile `legacy_default` → `webhookUrl` |
+| `cfg_bot_name` | credential profile `legacy_default` → `botName` |
+| `cfg_avatar_url` | credential profile `legacy_default` → `avatarUrl` |
+| `cfg_channel_id` | credential profile `legacy_default` → `channelId` |
+| `cfg_channel_name` | credential profile `legacy_default` → `channelName` |
+| `cfg_mode` | credential profile `legacy_default` → `mode` |
+
+The flat keys are cleared once the migration ran, so there is exactly one source of truth and
+no secret is left behind in the old place.
+
+### Preferences — `SharedPreferences`
+
+| 1.0 key | 2.1 |
+|:---|:---|
+| `set_theme_mode` | unchanged |
+| `set_onboarding_done` | unchanged |
+| `set_max_file_mb` | unchanged |
+| `set_auto_update` | unchanged |
+| `set_battery_asked` | unchanged |
+| `set_orientation` | unchanged |
+| `set_update_last_check_ms` | unchanged |
+| `set_update_skipped_tag` | unchanged |
+| — | `set_bandwidth_cap_kb`, `set_safe_resume`, `set_widget_density`, `set_overlay_auto_hide`, `set_overlay_enabled` (new in 2.1) |
+
+### Behaviour and identity
+
+| 1.0 | 2.1 |
+|:---|:---|
+| Application id `com.dmsender.discord_media_sender` | unchanged |
+| App label `Discord Media Sender` | unchanged |
+| Database `discord_media_sender.db` | unchanged, schema v4 |
+| Minimum SDK 24 | unchanged |
+| ZIP import limit of 5 GB | unchanged |
+| Update check every 6 hours | unchanged |
+| Batching and `retry_after` handling | unchanged |
+| Pause after the current batch | unchanged |
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full comparison and
-[`docs/DATABASE.md`](docs/DATABASE.md) for the schema and migration details.
+[`docs/DATABASE.md`](docs/DATABASE.md) for the schema and the migration details.
 
 ---
 
@@ -314,5 +364,47 @@ key is destroyed with the application data.
 
 ## Licence
 
-Released under the MIT licence for the Discord Media Sender project. Discord is a trademark of
-Discord Inc.; this project is not affiliated with or endorsed by Discord.
+The source code of Discord Media Sender is released under the **MIT licence**.
+
+| | |
+|:---|:---|
+| **Licence** | MIT |
+| **Full text** | [`LICENSE`](LICENSE) |
+| **Copyright** | © 2026 Discord Media Sender contributors |
+| **Applies to** | The Dart and Kotlin source, the brand assets, the documentation and the build workflows |
+
+### Third-party components
+
+The project ships third-party code and assets that keep **their own** licences.
+
+| Component | Licence |
+|:---|:---|
+| **Inter** — bundled typeface in `assets/fonts/` | SIL Open Font License 1.1 · © 2016 The Inter Project Authors |
+| **Manrope** — bundled typeface in `assets/fonts/` | SIL Open Font License 1.1 · © 2019 The Manrope Project Authors |
+| **Flutter** SDK — the engine binaries inside the APK | BSD-3-Clause · © 2014 The Flutter Authors |
+| **MIT packages** — `cupertino_icons`, `flutter_riverpod`, `dio`, `archive`, `android_file_picker`, `file_picker`, `flutter_video_thumbnail_plus`, `flutter_foreground_task`, `flutter_svg`, `image` | MIT |
+| **BSD-3-Clause packages** — `path`, `crypto`, `intl`, `convert`, `collection`, `open_filex`, `package_info_plus`, `device_info_plus`, `path_provider`, `shared_preferences`, `flutter_secure_storage` and their Android packages, `share_plus` | BSD-3-Clause |
+| **sqflite** | BSD-2-Clause |
+| **pdf** | Apache-2.0 |
+| **Android Gradle Plugin**, **Gradle**, **Kotlin** — the build toolchain | Apache-2.0 |
+
+Every one of those packages ships its own `LICENSE` file inside the package. `flutter pub
+deps` lists every one of them with its source and version.
+
+Both typefaces carry their Open Font License notice inside the font file itself. The Open Font
+License requires the copyright notice and the licence text to travel with the fonts: if you
+redistribute the APK or the assets folder, ship the Inter and Manrope licence notices next to
+`assets/fonts/`.
+
+### Trademarks
+
+Discord is a trademark of Discord Inc. This project is not affiliated with, endorsed by or
+sponsored by Discord Inc. The origami paper plane is an original mark of this project; no
+Discord brand asset is used.
+
+### The release signing key
+
+The Android release keystore is **not** covered by the MIT licence and is **not** part of this
+repository — it is git-ignored. It is the identity that lets a new release install over an
+existing installation, so it has to stay private. See
+[`docs/SIGNING.md`](docs/SIGNING.md).
