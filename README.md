@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/brand/logo_paper_plane_light.svg" alt="Discord Media Sender — origami paper plane" width="220">
+  <img src="assets/brand/logo_paper_plane.svg" alt="Discord Media Sender — origami paper plane" width="220">
 </p>
 
 <p align="center">
