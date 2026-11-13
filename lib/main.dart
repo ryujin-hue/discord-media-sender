@@ -25,9 +25,16 @@ Future<void> main() async {
   // storage mechanism is used from here on.
   await SecureStore.instance.migrateLegacyCredentials();
 
+  // The background upload service has to be prepared before the first upload.
+  // Without this the plugin refuses to start the service and the transfer
+  // would stop as soon as the app goes to the background.
+  await ForegroundManager.instance.initialize();
+
   // Restore the queue and mirror the engine state to the Android widgets.
   final UploadEngine engine = UploadEngine.instance;
-  final int pendingCount = await engine.restore();
+  // The whole process is new, so no other isolate can own a job: every
+  // interrupted upload is recovered here.
+  final int pendingCount = await engine.restore(recoverAll: true);
   WidgetBridge.instance.attach(engine);
 
   // Work that a killed process left behind needs the foreground service, or

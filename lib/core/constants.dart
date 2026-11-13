@@ -12,7 +12,7 @@ class AppConstants {
   // Identity
   // ---------------------------------------------------------------------------
   static const String appName = 'Discord Media Sender';
-  static const String appVersion = '2.1.0';
+  static const String appVersion = '2.1.1';
   static const String applicationId = 'com.dmsender.discord_media_sender';
 
   /// Official GitHub repository used for update checks and release publishing.
@@ -64,7 +64,7 @@ class AppConstants {
   // Database
   // ---------------------------------------------------------------------------
   static const String databaseName = 'discord_media_sender.db';
-  static const int databaseVersion = 3;
+  static const int databaseVersion = 4;
 
   // ---------------------------------------------------------------------------
   // Secure storage keys (carried over from 1.0 so credentials survive upgrades)

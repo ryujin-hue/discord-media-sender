@@ -103,6 +103,78 @@ void main() {
   });
 
   group('Schema', () {
+    test('adds the heartbeat column to an existing 2.1 database', () async {
+      // A database that was created by the 2.1.0 build has no heartbeat
+      // column. Opening it with 2.1.1 adds the column without touching a
+      // single row.
+      final String path = '${tempDir.path}/upgrade.db';
+      final Database legacy = await databaseFactoryFfi.openDatabase(
+        path,
+        options: OpenDatabaseOptions(
+          version: 3,
+          onCreate: (Database db, int version) async {
+            await db.execute('''
+              CREATE TABLE distribution_jobs (
+                id TEXT PRIMARY KEY,
+                file_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                file_size INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at INTEGER NOT NULL,
+                destination_id TEXT NOT NULL,
+                destination_name TEXT,
+                sha256 TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                priority INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT,
+                http_code INTEGER,
+                discord_code INTEGER,
+                message_id INTEGER,
+                started_at INTEGER,
+                completed_at INTEGER,
+                bytes_sent INTEGER NOT NULL DEFAULT 0,
+                total_bytes INTEGER NOT NULL DEFAULT 0,
+                batch_index INTEGER NOT NULL DEFAULT 0,
+                caption TEXT
+              )
+            ''');
+            await db.insert('distribution_jobs', <String, Object?>{
+              'id': 'job-keep',
+              'file_path': '/tmp/keep.jpg',
+              'file_name': 'keep.jpg',
+              'file_size': 10,
+              'status': 'pending',
+              'created_at': 1700000000000,
+              'destination_id': 'dest-a',
+            });
+          },
+        ),
+      );
+      await legacy.close();
+
+      AppDatabase.pathOverride = path;
+      final AppDatabase database = AppDatabase.instance;
+      final Database db = await database.database;
+
+      final List<Map<String, Object?>> columns = await db.rawQuery(
+        'PRAGMA table_info(distribution_jobs)',
+      );
+      expect(
+        columns.any((Map<String, Object?> c) => c['name'] == 'heartbeat_at'),
+        isTrue,
+      );
+
+      final List<Map<String, Object?>> rows = await db.query(
+        'distribution_jobs',
+      );
+      expect(rows.length, 1);
+      expect(
+        rows.first['file_name'],
+        'keep.jpg',
+        reason: 'the existing row survives the upgrade',
+      );
+    });
+
     test('creates every 2.0 table on a fresh install', () async {
       final AppDatabase database = AppDatabase.instance;
       final Database db = await database.database;

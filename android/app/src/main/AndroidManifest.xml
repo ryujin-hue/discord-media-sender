@@ -47,6 +47,11 @@
             </intent-filter>
         </activity>
 
+        <!-- The icon of the foreground upload notification. -->
+        <meta-data
+            android:name="com.dmsender.discord_media_sender.notification_icon"
+            android:resource="@mipmap/ic_launcher" />
+
         <!-- Background upload service provided by flutter_foreground_task. -->
         <service
             android:name="com.pravera.flutter_foreground_task.service.ForegroundService"

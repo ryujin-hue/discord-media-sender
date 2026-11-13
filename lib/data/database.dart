@@ -46,6 +46,7 @@ class AppDatabase {
           await _createLegacyTables(db);
           await _createV2Tables(db);
           await _createV3Tables(db);
+          await _createV4Tables(db);
         },
         onUpgrade: (Database db, int oldVersion, int newVersion) async {
           if (oldVersion < 2) {
@@ -55,6 +56,9 @@ class AppDatabase {
           }
           if (oldVersion < 3) {
             await _createV3Tables(db);
+          }
+          if (oldVersion < 4) {
+            await _createV4Tables(db);
           }
         },
       );
@@ -290,7 +294,8 @@ class AppDatabase {
         bytes_sent INTEGER NOT NULL DEFAULT 0,
         total_bytes INTEGER NOT NULL DEFAULT 0,
         batch_index INTEGER NOT NULL DEFAULT 0,
-        caption TEXT
+        caption TEXT,
+        heartbeat_at INTEGER
       )
       ''',
       'CREATE INDEX IF NOT EXISTS idx_jobs_status ON distribution_jobs(status)',
@@ -493,6 +498,25 @@ class AppDatabase {
 
     for (final String statement in statements) {
       await db.execute(statement);
+    }
+  }
+
+  /// The columns added by the 2.1.1 release.
+  ///
+  /// The heartbeat proves that a job is still being worked on. A job whose
+  /// heartbeat is stale belongs to a process that died, and its work is
+  /// returned to the queue instead of being lost.
+  static Future<void> _createV4Tables(Database db) async {
+    final List<Map<String, Object?>> columns = await db.rawQuery(
+      'PRAGMA table_info(distribution_jobs)',
+    );
+    final bool hasHeartbeat = columns.any(
+      (Map<String, Object?> column) => column['name'] == 'heartbeat_at',
+    );
+    if (!hasHeartbeat) {
+      await db.execute(
+        'ALTER TABLE distribution_jobs ADD COLUMN heartbeat_at INTEGER',
+      );
     }
   }
 
@@ -1046,6 +1070,111 @@ class AppDatabase {
   // ---------------------------------------------------------------------------
   // Distribution jobs
   // ---------------------------------------------------------------------------
+
+  /// A single job by id.
+  Future<DistributionJob?> jobById(String id) async {
+    final Database db = await database;
+    final List<Map<String, Object?>> rows = await db.query(
+      'distribution_jobs',
+      where: 'id = ?',
+      whereArgs: <Object?>[id],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return DistributionJob.fromMap(rows.first);
+  }
+
+  /// Claims a pending job for processing.
+  ///
+  /// The update only succeeds while the job is still pending, so exactly one
+  /// isolate can take a job. The UI isolate and the foreground service isolate
+  /// are two separate engines that share this database; without the claim
+  /// both of them would send the same file.
+  Future<bool> claimJob(String jobId) async {
+    final Database db = await database;
+    final int changed = await db.update(
+      'distribution_jobs',
+      <String, Object?>{
+        'status': UploadStatus.uploading.key,
+        'started_at': tsToInt(DateTime.now()),
+        'heartbeat_at': tsToInt(DateTime.now()),
+      },
+      where: 'id = ? AND status = ?',
+      whereArgs: <Object?>[jobId, UploadStatus.pending.key],
+    );
+    return changed > 0;
+  }
+
+  /// Returns jobs that were left in the "uploading" state.
+  ///
+  /// A process that was killed while it was uploading leaves the row behind.
+  /// The work is not lost: the next start picks it up again.
+  Future<List<DistributionJob>> listInterruptedJobs() async {
+    final Database db = await database;
+    final List<Map<String, Object?>> rows = await db.query(
+      'distribution_jobs',
+      where: 'status = ?',
+      whereArgs: <Object?>[UploadStatus.uploading.key],
+    );
+    return rows.map(DistributionJob.fromMap).toList();
+  }
+
+  /// Puts the interrupted jobs back into the queue.
+  ///
+  /// A job that is still being worked on keeps a fresh heartbeat, so it is
+  /// never touched. Only a job whose heartbeat went stale — which means the
+  /// process that owned it died — is returned to the queue.
+  ///
+  /// [recoverAll] is used by the cold start of the app: there the whole
+  /// process is new, so no other isolate can own a job.
+  Future<int> requeueInterruptedJobs({
+    Duration staleAfter = const Duration(seconds: 90),
+    bool recoverAll = false,
+  }) async {
+    final Database db = await database;
+    final DateTime threshold = DateTime.now().subtract(staleAfter);
+    if (recoverAll) {
+      return db.update(
+        'distribution_jobs',
+        <String, Object?>{'status': UploadStatus.pending.key},
+        where: 'status = ?',
+        whereArgs: <Object?>[UploadStatus.uploading.key],
+      );
+    }
+    return db.update(
+      'distribution_jobs',
+      <String, Object?>{'status': UploadStatus.pending.key},
+      where: 'status = ? AND (heartbeat_at IS NULL OR heartbeat_at < ?)',
+      whereArgs: <Object?>[UploadStatus.uploading.key, tsToInt(threshold)],
+    );
+  }
+
+  /// Records that a job is still being worked on.
+  Future<void> heartbeatJob(String jobId) async {
+    final Database db = await database;
+    await db.update(
+      'distribution_jobs',
+      <String, Object?>{'heartbeat_at': tsToInt(DateTime.now())},
+      where: 'id = ?',
+      whereArgs: <Object?>[jobId],
+    );
+  }
+
+  /// The number of jobs per status.
+  ///
+  /// The counts come from the database so that both isolates report the same
+  /// truth, even when only one of them is alive.
+  Future<Map<String, int>> jobCounts() async {
+    final Database db = await database;
+    final List<Map<String, Object?>> rows = await db.rawQuery(
+      'SELECT status, COUNT(*) AS total FROM distribution_jobs GROUP BY status',
+    );
+    final Map<String, int> counts = <String, int>{};
+    for (final Map<String, Object?> row in rows) {
+      counts[row['status'] as String? ?? ''] = (row['total'] as int?) ?? 0;
+    }
+    return counts;
+  }
 
   Future<List<DistributionJob>> listJobs({
     String? status,

@@ -172,3 +172,52 @@ The floating overlay is a view onto the same state store. Two rules matter:
   the foreground service.
 - The overlay auto-hides while the engine is idle and the queue is empty, and reappears as
   soon as there is work.
+
+---
+
+## 2.1.1: the background model
+
+### The service is prepared before the first upload
+
+`flutter_foreground_task` refuses to start a service that was not initialised.
+The 2.1.0 build never called `init`, so the exception was swallowed and the
+foreground service never ran. `ForegroundManager.initialize()` prepares the
+plugin in `main()` with a wake lock, an auto restart and a restart after a
+reboot or an app update.
+
+### A job is claimed before it is sent
+
+The app isolate and the service isolate are two engines that share the SQLite
+queue. A job is claimed with an atomic update that only succeeds while the job
+is still pending:
+
+```sql
+UPDATE distribution_jobs
+   SET status = 'uploading', started_at = ?, heartbeat_at = ?
+ WHERE id = ? AND status = 'pending'
+```
+
+The isolate that wins the claim sends the file; the other one moves on. A file
+is therefore never uploaded twice.
+
+### The heartbeat proves that a job is alive
+
+A claimed job refreshes `heartbeat_at` on every progress callback and every
+15 seconds. The recovery uses it:
+
+- The cold start of the app recovers every job that is still marked as
+  uploading, because the whole process is new.
+- The service isolate recovers only jobs whose heartbeat went stale, because
+  the app isolate may be uploading a job right now.
+
+### The shared pause flag
+
+The pause flag lives in the database and is shared by both isolates. It is
+cleared by an explicit resume or cancel, never by the end of a run loop — that
+would silently continue an upload that the user paused.
+
+### The state comes from the database
+
+The counts in the snapshot are read from the database, so both isolates report
+the same numbers and the widget stays correct while the app is in the
+background.

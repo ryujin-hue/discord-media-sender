@@ -6,6 +6,7 @@ import '../../core/formatters.dart';
 import '../../data/models.dart';
 import '../../providers/config_providers.dart';
 import '../../providers/upload_providers.dart';
+import '../../services/foreground_manager.dart';
 import '../../services/upload_engine.dart';
 import '../../widgets/brand.dart';
 import '../../widgets/common.dart';
@@ -38,6 +39,14 @@ class HomeScreen extends ConsumerWidget {
             children: <Widget>[
               const _HomeHeader(),
               const SizedBox(height: 14),
+              if (snapshot != null &&
+                  snapshot.pendingCount > 0 &&
+                  !snapshot.foregroundServiceRunning)
+                _BackgroundServiceWarning(snapshot: snapshot),
+              if (snapshot != null &&
+                  snapshot.pendingCount > 0 &&
+                  !snapshot.foregroundServiceRunning)
+                const SizedBox(height: 12),
               _LiveMonitorCard(snapshot: snapshot),
               const SizedBox(height: 14),
               const _StatsGrid(),
@@ -290,6 +299,68 @@ class _LiveMonitorCard extends ConsumerWidget {
                 ),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The warning that the upload will not survive leaving the app.
+///
+/// The background service is what keeps a transfer alive when the app is not
+/// in the foreground. If it did not start, the user has to know.
+class _BackgroundServiceWarning extends ConsumerWidget {
+  const _BackgroundServiceWarning({required this.snapshot});
+
+  final EngineSnapshot snapshot;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ThemeData theme = Theme.of(context);
+    final String message =
+        snapshot.foregroundServiceError ??
+        'The background service is not running. The upload stops when you '
+            'leave the app.';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppConstants.colorError.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Icon(
+            Icons.warning_amber_rounded,
+            size: 18,
+            color: AppConstants.colorError,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  'Background service stopped',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: AppConstants.colorError,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(message, style: theme.textTheme.bodySmall),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: () async {
+              await ForegroundManager.instance.start();
+              ref.invalidate(engineSnapshotProvider);
+            },
+            child: const Text('Start'),
           ),
         ],
       ),

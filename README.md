@@ -16,7 +16,7 @@ retry, a CSV export of the upload jobs and a configurable widget density.
 | | |
 |---|---|
 | Application id | `com.dmsender.discord_media_sender` |
-| Version | 2.1.0 (versionCode 20100) |
+| Version | 2.1.1 (versionCode 20101) |
 | Minimum Android | 7.0 (API 24) |
 | Target / compile SDK | 36 |
 | Flutter | 3.47.9 stable · Dart 3.13.7 |
@@ -27,6 +27,8 @@ retry, a CSV export of the upload jobs and a configurable widget density.
 
 ## Table of contents
 
+- [What changed in 2.1.1](#what-changed-in-211)
+- [What changed in 2.1](#what-changed-in-21)
 - [What changed since 1.0](#what-changed-since-10)
 - [Feature overview](#feature-overview)
 - [Architecture](#architecture)
@@ -38,6 +40,32 @@ retry, a CSV export of the upload jobs and a configurable widget density.
 - [Documentation index](#documentation-index)
 
 ---
+
+## What changed in 2.1.1
+
+The 2.1.1 release makes the background upload actually work. The audit of the
+2.1.0 build found three defects in the background path, each of them proved
+by a failing test before it was fixed.
+
+- **The foreground service was never initialised.** The plugin refuses to
+  start a service that was not prepared, so the exception was swallowed and
+  the transfer stopped as soon as the app went to the background. The plugin is
+  now prepared before the first upload, with a wake lock, an auto restart, and
+  a restart after a reboot or an app update.
+- **A file could be uploaded twice.** The app isolate and the service isolate
+  are two engines that share the queue. Both could pick up the same pending
+  job. A job is now claimed atomically before it is sent, so exactly one
+  isolate sends it.
+- **An interrupted upload was lost.** A job that was being sent when the
+  process died stayed in the "uploading" state forever. Every job now carries
+  a heartbeat; work that was interrupted goes back into the queue instead of
+  disappearing.
+
+The home screen now says it plainly when work is pending and the background
+service is not running, instead of letting the upload die silently.
+
+See [docs/BACKGROUND_UPLOADS.md](docs/BACKGROUND_UPLOADS.md) for the whole
+picture.
 
 ## What changed in 2.1
 

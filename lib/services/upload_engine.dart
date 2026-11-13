@@ -34,6 +34,8 @@ class EngineSnapshot {
     this.speedBytesPerSecond,
     this.etaSeconds,
     this.events = const <LiveActivityEvent>[],
+    this.foregroundServiceRunning = false,
+    this.foregroundServiceError,
   });
 
   final List<DistributionJob> jobs;
@@ -51,6 +53,12 @@ class EngineSnapshot {
   final double? speedBytesPerSecond;
   final int? etaSeconds;
   final List<LiveActivityEvent> events;
+
+  /// Whether the foreground service that keeps the upload alive is running.
+  final bool foregroundServiceRunning;
+
+  /// The last error that prevented the foreground service from starting.
+  final String? foregroundServiceError;
 
   double get progress {
     if (totalBytes <= 0) return 0;
@@ -73,6 +81,8 @@ class EngineSnapshot {
     double? speedBytesPerSecond,
     int? etaSeconds,
     List<LiveActivityEvent>? events,
+    bool? foregroundServiceRunning,
+    String? foregroundServiceError,
   }) {
     return EngineSnapshot(
       jobs: jobs ?? this.jobs,
@@ -91,6 +101,10 @@ class EngineSnapshot {
       speedBytesPerSecond: speedBytesPerSecond ?? this.speedBytesPerSecond,
       etaSeconds: etaSeconds ?? this.etaSeconds,
       events: events ?? this.events,
+      foregroundServiceRunning:
+          foregroundServiceRunning ?? this.foregroundServiceRunning,
+      foregroundServiceError:
+          foregroundServiceError ?? this.foregroundServiceError,
     );
   }
 }
@@ -158,6 +172,17 @@ class UploadEngine {
   String? _currentFileName;
   int _sentBytes = 0;
   int _totalBytes = 0;
+
+  /// The heartbeat of the job that is currently being sent.
+  Timer? _activeHeartbeat;
+
+  /// The number of jobs per status, read from the database.
+  ///
+  /// The counts are shared by every isolate, so the widget and the overlay
+  /// show the same numbers whether the app is in the foreground or not.
+  int _completedCount = 0;
+  int _failedCountTotal = 0;
+  int _pendingCountTotal = 0;
   double _speedBytesPerSecond = 0;
   int? _etaSeconds;
   DateTime? _lastSpeedSample;
@@ -185,22 +210,15 @@ class UploadEngine {
   Stream<EngineSnapshot> get snapshots => _snapshots.stream;
 
   EngineSnapshot get snapshot {
-    final int pending = _jobs
-        .where((DistributionJob j) => j.status == UploadStatus.pendingKey)
-        .length;
     return EngineSnapshot(
       jobs: List<DistributionJob>.unmodifiable(_jobs),
       isRunning: _running,
       isPaused: _paused,
       totalBytes: _totalBytes,
       sentBytes: _sentBytes,
-      completedCount: _jobs
-          .where((DistributionJob j) => j.status == UploadStatus.completed.key)
-          .length,
-      failedCount: _jobs
-          .where((DistributionJob j) => j.status == UploadStatus.failed.key)
-          .length,
-      pendingCount: pending,
+      completedCount: _completedCount,
+      failedCount: _failedCountTotal,
+      pendingCount: _pendingCountTotal,
       activeDestinationId: _activeDestinationId,
       activeDestinationName: _activeDestinationName,
       currentFileName: _currentFileName,
@@ -208,7 +226,26 @@ class UploadEngine {
       speedBytesPerSecond: _speedBytesPerSecond,
       etaSeconds: _etaSeconds,
       events: List<LiveActivityEvent>.unmodifiable(_events),
+      foregroundServiceRunning: ForegroundManager.instance.isRunning,
+      foregroundServiceError: ForegroundManager.instance.lastError,
     );
+  }
+
+  /// Reads the job counts from the database.
+  ///
+  /// Every isolate keeps its own copy of the numbers, so the widget shows the
+  /// same figures no matter which isolate is alive.
+  Future<void> _refreshCounts() async {
+    try {
+      final Map<String, int> counts = await _db.jobCounts();
+      _completedCount = counts[UploadStatus.completed.key] ?? 0;
+      _failedCountTotal = counts[UploadStatus.failed.key] ?? 0;
+      _pendingCountTotal =
+          (counts[UploadStatus.pending.key] ?? 0) +
+          (counts[UploadStatus.uploading.key] ?? 0);
+    } catch (_) {
+      // A failing count must never break an upload.
+    }
   }
 
   void _publish() {
@@ -222,7 +259,31 @@ class UploadEngine {
   /// picked up again instead of being lost. Returns the number of jobs that
   /// are still pending, which the caller uses to decide whether the foreground
   /// service has to be started.
-  Future<int> restore() async {
+  ///
+  /// [recoverAll] has to be true only when the whole process is new, which is
+  /// the case for the cold start of the app. The foreground service isolate
+  /// leaves it false, because another isolate may be uploading a job right
+  /// now and that job must not be taken away from it.
+  Future<int> restore({
+    bool recoverAll = false,
+    Duration staleAfter = const Duration(seconds: 90),
+  }) async {
+    // A process that was killed while it was uploading leaves its job in the
+    // "uploading" state. That work is not lost: it goes back into the queue.
+    final int recovered = await _db.requeueInterruptedJobs(
+      recoverAll: recoverAll,
+      staleAfter: staleAfter,
+    );
+    if (recovered > 0) {
+      await _persistEvent(
+        'engine_recovered',
+        recovered == 1
+            ? 'Recovered 1 interrupted upload'
+            : 'Recovered $recovered interrupted uploads',
+        severity: 'warning',
+      );
+    }
+
     final List<DistributionJob> persisted = await _db.listJobs(
       status: UploadStatus.pending.key,
     );
@@ -233,6 +294,7 @@ class UploadEngine {
       _totalBytes += job.fileSize;
     }
     _events.addAll(await _db.listLiveEvents(limit: 50));
+    await _refreshCounts();
     _publish();
     return persisted.length;
   }
@@ -326,9 +388,26 @@ class UploadEngine {
       // The foreground service is started together with the queue so that a
       // background upload is never killed by the system right after it began.
       unawaited(run());
-      unawaited(ForegroundManager.instance.start());
+      unawaited(_startForegroundService());
     }
     return skipped;
+  }
+
+  /// Starts the foreground service and publishes the result.
+  ///
+  /// A failure is not hidden: it ends up in the snapshot so that the user
+  /// sees that the upload will not survive leaving the app.
+  Future<void> _startForegroundService() async {
+    final bool started = await ForegroundManager.instance.start();
+    if (!started) {
+      await _persistEvent(
+        'engine_service_failed',
+        ForegroundManager.instance.lastError ??
+            'The background service could not be started',
+        severity: 'error',
+      );
+    }
+    _publish();
   }
 
   /// Chooses the destinations for a distribution mode.
@@ -408,7 +487,10 @@ class UploadEngine {
       _currentFileName = null;
       _activeDestinationId = null;
       _activeDestinationName = null;
-      await _db.setSetting(controlPauseKey, '0');
+      await _refreshCounts();
+      // The pause flag is shared with the other isolate, so it is only
+      // cleared by an explicit resume or cancel. Clearing it here would
+      // silently continue an upload that the user paused.
       _publish();
       await _persistEvent(
         'engine_stopped',
@@ -436,8 +518,19 @@ class UploadEngine {
 
   /// Processes one job, sending it to its destination.
   Future<void> _processJob(DistributionJob job) async {
+    // The UI isolate and the foreground service isolate are two engines that
+    // share this database. The claim makes sure that only one of them sends
+    // the file; the other one moves on to the next job.
+    final bool claimed = await _db.claimJob(job.id);
+    if (!claimed) {
+      final DistributionJob? current = await _db.jobById(job.id);
+      if (current != null) _replaceJob(current);
+      return;
+    }
+
     final File file = File(job.filePath);
     if (!file.existsSync()) {
+      _stopHeartbeat();
       await _failJob(job, 'File not found: ${job.fileName}', httpCode: null);
       return;
     }
@@ -477,6 +570,16 @@ class UploadEngine {
     );
     _replaceJob(started);
     await _db.upsertJob(started);
+    await _refreshCounts();
+
+    // The heartbeat keeps running even when the transfer stalls, so the job
+    // is never taken away from this isolate.
+    final Timer heartbeat = Timer.periodic(const Duration(seconds: 15), (
+      Timer timer,
+    ) {
+      unawaited(_db.heartbeatJob(job.id));
+    });
+    _activeHeartbeat = heartbeat;
     await _persistEvent(
       'upload_started',
       'Uploading ${job.fileName}',
@@ -490,10 +593,12 @@ class UploadEngine {
     try {
       result = await _sendTo(destination, file, job);
     } catch (error) {
+      _stopHeartbeat();
       await _failJob(job, ErrorTranslator.translate(error));
       return;
     }
 
+    _stopHeartbeat();
     if (result.success) {
       await _completeJob(job, destination, result);
     } else {
@@ -504,6 +609,12 @@ class UploadEngine {
         discordCode: result.discordCode,
       );
     }
+  }
+
+  /// Stops the heartbeat of the current job.
+  void _stopHeartbeat() {
+    _activeHeartbeat?.cancel();
+    _activeHeartbeat = null;
   }
 
   /// Reads the global bandwidth cap from the preferences.
@@ -602,6 +713,8 @@ class UploadEngine {
         etaSeconds: _etaSeconds,
       ),
     );
+    // The heartbeat tells the other isolate that this job is alive.
+    unawaited(_db.heartbeatJob(job.id));
     _publish();
   }
 
@@ -847,6 +960,8 @@ class UploadEngine {
   /// Cancels every pending job.
   Future<void> cancel() async {
     _cancelRequested = true;
+    _paused = false;
+    await _db.setSetting(controlPauseKey, '0');
     await _db.setSetting(
       controlCancelKey,
       DateTime.now().millisecondsSinceEpoch.toString(),
@@ -1035,9 +1150,7 @@ class UploadEngine {
     }
   }
 
-  int _failedCount() => _jobs
-      .where((DistributionJob j) => j.status == UploadStatus.failed.key)
-      .length;
+  int _failedCount() => _failedCountTotal;
 
   Future<Destination?> _destinationFor(String id) async {
     final List<Destination> destinations = await _db.listDestinations();
@@ -1101,6 +1214,7 @@ class UploadEngine {
 
   /// Releases the snapshot stream.
   void dispose() {
+    _stopHeartbeat();
     _snapshots.close();
   }
 }

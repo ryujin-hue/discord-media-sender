@@ -446,6 +446,175 @@ void main() {
       );
     });
 
+    test('two isolates never upload the same job twice', () async {
+      // The UI isolate and the foreground service isolate are two separate
+      // engines that share the database. Only one of them may own a job.
+      final File file = await createFile('shared.jpg', 'shared bytes');
+      final _FakeDiscordApi ui = _FakeDiscordApi(
+        const DiscordSendResult(success: true, messageId: 'message-ui'),
+      );
+      final _FakeDiscordApi service = _FakeDiscordApi(
+        const DiscordSendResult(success: true, messageId: 'message-service'),
+      );
+
+      final UploadEngine uiEngine = UploadEngine.createForTesting(
+        apiClient: ui,
+      );
+      await uiEngine.enqueue(
+        <MediaCandidate>[MediaService.instance.describe(file.path)],
+        options: EnqueueOptions(
+          destinations: <Destination>[destination],
+          autoStart: false,
+        ),
+      );
+
+      // The service isolate restores the same pending job.
+      final UploadEngine serviceEngine = UploadEngine.createForTesting(
+        apiClient: service,
+      );
+      await serviceEngine.restore();
+
+      await uiEngine.run();
+      await serviceEngine.run();
+
+      expect(
+        ui.callCount + service.callCount,
+        1,
+        reason: 'the file is sent exactly once, not once per isolate',
+      );
+
+      final List<DeliveryRecord> deliveries = await AppDatabase.instance
+          .listDeliveries();
+      expect(deliveries.length, 1);
+    });
+
+    test('a job that was interrupted is picked up again', () async {
+      // A process that was killed while a job was uploading leaves the row in
+      // the "uploading" state. The next start has to recover it.
+      final File file = await createFile(
+        'interrupted.jpg',
+        'interrupted bytes',
+      );
+      await AppDatabase.instance.upsertJob(
+        DistributionJob(
+          id: 'job-interrupted',
+          filePath: file.path,
+          fileName: 'interrupted.jpg',
+          fileSize: file.lengthSync(),
+          status: UploadStatus.uploading.key,
+          createdAt: DateTime.now(),
+          destinationId: destination.id,
+          destinationName: destination.name,
+          sha256: 'b' * 64,
+        ),
+      );
+
+      final _FakeDiscordApi api = _FakeDiscordApi(
+        const DiscordSendResult(success: true, messageId: 'message-recovered'),
+      );
+      final UploadEngine engine = UploadEngine.createForTesting(apiClient: api);
+
+      final int pending = await engine.restore();
+      expect(
+        pending,
+        1,
+        reason: 'the interrupted job is recovered as pending work',
+      );
+
+      await engine.run();
+      expect(api.callCount, 1, reason: 'the recovered job is uploaded');
+    });
+
+    test(
+      'a live job is never taken away from the isolate that owns it',
+      () async {
+        // The foreground service isolate restores the queue while the UI
+        // isolate is uploading. The job of the UI isolate must stay there.
+        final File file = await createFile('owned.bin', 'owned bytes');
+        final _FakeDiscordApi ui = _FakeDiscordApi(
+          const DiscordSendResult(success: true, messageId: 'message-owner'),
+        );
+
+        final UploadEngine uiEngine = UploadEngine.createForTesting(
+          apiClient: ui,
+        );
+        await uiEngine.enqueue(
+          <MediaCandidate>[MediaService.instance.describe(file.path)],
+          options: EnqueueOptions(
+            destinations: <Destination>[destination],
+            autoStart: false,
+          ),
+        );
+        await uiEngine.run();
+
+        // A job that is still marked as uploading.
+        await AppDatabase.instance.upsertJob(
+          DistributionJob(
+            id: 'job-live',
+            filePath: file.path,
+            fileName: 'owned.bin',
+            fileSize: file.lengthSync(),
+            status: UploadStatus.uploading.key,
+            createdAt: DateTime.now(),
+            destinationId: destination.id,
+            destinationName: destination.name,
+          ),
+        );
+        await AppDatabase.instance.heartbeatJob('job-live');
+
+        final UploadEngine serviceEngine = UploadEngine.createForTesting(
+          apiClient: _FakeDiscordApi(
+            const DiscordSendResult(success: true, messageId: 'message-steal'),
+          ),
+        );
+        final int pending = await serviceEngine.restore();
+
+        expect(
+          pending,
+          0,
+          reason: 'a job with a fresh heartbeat is not recovered',
+        );
+
+        final DistributionJob? live = await AppDatabase.instance.jobById(
+          'job-live',
+        );
+        expect(
+          live?.status,
+          UploadStatus.uploading.key,
+          reason: 'the job keeps its owner',
+        );
+      },
+    );
+
+    test('a job with a stale heartbeat is recovered', () async {
+      final File file = await createFile('stale.bin', 'stale bytes');
+      await AppDatabase.instance.upsertJob(
+        DistributionJob(
+          id: 'job-stale',
+          filePath: file.path,
+          fileName: 'stale.bin',
+          fileSize: file.lengthSync(),
+          status: UploadStatus.uploading.key,
+          createdAt: DateTime.now(),
+          destinationId: destination.id,
+          destinationName: destination.name,
+        ),
+      );
+
+      // The heartbeat is old, so the process that owned the job is gone.
+      final UploadEngine engine = UploadEngine.createForTesting(
+        apiClient: _FakeDiscordApi(
+          const DiscordSendResult(success: true, messageId: 'message-stale'),
+        ),
+      );
+      final int pending = await engine.restore(
+        recoverAll: false,
+        staleAfter: Duration.zero,
+      );
+
+      expect(pending, 1, reason: 'the abandoned job is recovered');
+    });
+
     test('publishes live activity events for the timeline', () async {
       final File file = await createFile('event.jpg', 'event bytes');
       final _FakeDiscordApi api = _FakeDiscordApi(
